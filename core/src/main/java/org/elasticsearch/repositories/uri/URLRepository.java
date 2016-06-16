@@ -19,12 +19,13 @@
 
 package org.elasticsearch.repositories.uri;
 
-import org.elasticsearch.cluster.metadata.SnapshotId;
+import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.blobstore.url.URLBlobStore;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.util.URIPattern;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.snapshots.IndexShardRepository;
@@ -41,6 +42,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Read-only URL-based implementation of the BlobStoreRepository
@@ -55,19 +57,22 @@ public class URLRepository extends BlobStoreRepository {
 
     public final static String TYPE = "url";
 
-    public static final Setting<List<String>> SUPPORTED_PROTOCOLS_SETTING = Setting.listSetting("repositories.url.supported_protocols",
-            Arrays.asList("http", "https", "ftp", "file", "jar"), Function.identity(), false, Setting.Scope.CLUSTER);
+    public static final Setting<List<String>> SUPPORTED_PROTOCOLS_SETTING =
+        Setting.listSetting("repositories.url.supported_protocols", Arrays.asList("http", "https", "ftp", "file", "jar"),
+            Function.identity(), Property.NodeScope);
 
-    public static final Setting<List<URIPattern>> ALLOWED_URLS_SETTING = Setting.listSetting("repositories.url.allowed_urls",
-            Collections.emptyList(), URIPattern::new, false, Setting.Scope.CLUSTER);
+    public static final Setting<List<URIPattern>> ALLOWED_URLS_SETTING =
+        Setting.listSetting("repositories.url.allowed_urls", Collections.emptyList(), URIPattern::new, Property.NodeScope);
 
-    public static final Setting<URL> URL_SETTING = new Setting<>("url", "http:", URLRepository::parseURL, false, Setting.Scope.CLUSTER);
-    public static final Setting<URL> REPOSITORIES_URL_SETTING = new Setting<>("repositories.url.url", (s) -> s.get("repositories.uri.url", "http:"),
-            URLRepository::parseURL, false, Setting.Scope.CLUSTER);
+    public static final Setting<URL> URL_SETTING = new Setting<>("url", "http:", URLRepository::parseURL, Property.NodeScope);
+    public static final Setting<URL> REPOSITORIES_URL_SETTING =
+        new Setting<>("repositories.url.url", (s) -> s.get("repositories.uri.url", "http:"), URLRepository::parseURL,
+            Property.NodeScope);
 
-    public static final Setting<Boolean> LIST_DIRECTORIES_SETTING = Setting.boolSetting("list_directories", true, false, Setting.Scope.CLUSTER);
-    public static final Setting<Boolean> REPOSITORIES_LIST_DIRECTORIES_SETTING = Setting.boolSetting("repositories.uri.list_directories", true,
-            false, Setting.Scope.CLUSTER);
+    public static final Setting<Boolean> LIST_DIRECTORIES_SETTING =
+        Setting.boolSetting("list_directories", true, Property.NodeScope);
+    public static final Setting<Boolean> REPOSITORIES_LIST_DIRECTORIES_SETTING =
+        Setting.boolSetting("repositories.uri.list_directories", true, Property.NodeScope);
 
     private final List<String> supportedProtocols;
 

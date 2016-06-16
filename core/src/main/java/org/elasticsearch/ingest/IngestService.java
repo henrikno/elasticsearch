@@ -19,12 +19,19 @@
 
 package org.elasticsearch.ingest;
 
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.ingest.core.IngestInfo;
+import org.elasticsearch.ingest.core.Processor;
+import org.elasticsearch.ingest.core.ProcessorInfo;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Holder class for several ingest related services.
@@ -49,8 +56,17 @@ public class IngestService implements Closeable {
         return pipelineExecutionService;
     }
 
-    public void setScriptService(ScriptService scriptService) {
-        pipelineStore.buildProcessorFactoryRegistry(processorsRegistryBuilder, scriptService);
+    public void buildProcessorsFactoryRegistry(ScriptService scriptService, ClusterService clusterService) {
+        pipelineStore.buildProcessorFactoryRegistry(processorsRegistryBuilder, scriptService, clusterService);
+    }
+
+    public IngestInfo info() {
+        Map<String, Processor.Factory> processorFactories = pipelineStore.getProcessorRegistry().getProcessorFactories();
+        List<ProcessorInfo> processorInfoList = new ArrayList<>(processorFactories.size());
+        for (Map.Entry<String, Processor.Factory> entry : processorFactories.entrySet()) {
+            processorInfoList.add(new ProcessorInfo(entry.getKey()));
+        }
+        return new IngestInfo(processorInfoList);
     }
 
     @Override

@@ -22,35 +22,46 @@ parser grammar PainlessParser;
 options { tokenVocab=PainlessLexer; }
 
 source
-    : statement+ EOF
+    : function* statement* EOF
     ;
 
+function
+    : decltype ID parameters block
+    ;
+
+parameters
+    : LP ( decltype ID ( COMMA decltype ID )* )? RP
+    ;
+
+// Note we use a predicate on the if/else case here to prevent the
+// "dangling-else" ambiguity by forcing the 'else' token to be consumed
+// as soon as one is found.  See (https://en.wikipedia.org/wiki/Dangling_else).
 statement
-    : IF LP expression RP block ( ELSE block )?                                              # if
-    | WHILE LP expression RP ( block | empty )                                               # while
-    | DO block WHILE LP expression RP SEMICOLON?                                             # do
-    | FOR LP initializer? SEMICOLON expression? SEMICOLON afterthought? RP ( block | empty ) # for
-    | declaration SEMICOLON?                                                                 # decl
-    | CONTINUE SEMICOLON?                                                                    # continue
-    | BREAK SEMICOLON?                                                                       # break
-    | RETURN expression SEMICOLON?                                                           # return
-    | TRY block trap+                                                                        # try
-    | THROW expression SEMICOLON?                                                            # throw
-    | expression SEMICOLON?                                                                  # expr
+    : IF LP expression RP trailer ( ELSE trailer | { _input.LA(1) != ELSE }? )                 # if
+    | WHILE LP expression RP ( trailer | empty )                                               # while
+    | DO block WHILE LP expression RP delimiter                                                # do
+    | FOR LP initializer? SEMICOLON expression? SEMICOLON afterthought? RP ( trailer | empty ) # for
+    | FOR LP decltype ID COLON expression RP trailer                                           # each
+    | declaration delimiter                                                                    # decl
+    | CONTINUE delimiter                                                                       # continue
+    | BREAK delimiter                                                                          # break
+    | RETURN expression delimiter                                                              # return
+    | TRY block trap+                                                                          # try
+    | THROW expression delimiter                                                               # throw
+    | expression delimiter                                                                     # expr
+    ;
+
+trailer
+    : block
+    | statement
     ;
 
 block
-    : LBRACK statement+ RBRACK                 # multiple
-    | statement                                # single
+    : LBRACK statement* RBRACK
     ;
 
 empty
-    : emptyscope
-    | SEMICOLON
-    ;
-
-emptyscope
-    : LBRACK RBRACK
+    : SEMICOLON
     ;
 
 initializer
@@ -63,7 +74,7 @@ afterthought
     ;
 
 declaration
-    : decltype declvar ( COMMA declvar )*
+    : decltype declvar (COMMA declvar)*
     ;
 
 decltype
@@ -75,62 +86,141 @@ declvar
     ;
 
 trap
-    : CATCH LP ( TYPE ID ) RP ( block | emptyscope )
+    : CATCH LP TYPE ID RP block
     ;
 
-expression
-    :               LP expression RP                                    # precedence
-    |               ( OCTAL | HEX | INTEGER | DECIMAL )                 # numeric
-    |               CHAR                                                # char
-    |               TRUE                                                # true
-    |               FALSE                                               # false
-    |               NULL                                                # null
-    | <assoc=right> extstart increment                                  # postinc
-    | <assoc=right> increment extstart                                  # preinc
-    |               extstart                                            # external
-    | <assoc=right> ( BOOLNOT | BWNOT | ADD | SUB ) expression          # unary
-    | <assoc=right> LP decltype RP expression                           # cast
-    |               expression ( MUL | DIV | REM ) expression           # binary
-    |               expression ( ADD | SUB ) expression                 # binary
-    |               expression ( LSH | RSH | USH ) expression           # binary
-    |               expression ( LT | LTE | GT | GTE ) expression       # comp
-    |               expression ( EQ | EQR | NE | NER ) expression       # comp
-    |               expression BWAND expression                         # binary
-    |               expression BWXOR expression                         # binary
-    |               expression BWOR expression                          # binary
-    |               expression BOOLAND expression                       # bool
-    |               expression BOOLOR expression                        # bool
-    | <assoc=right> expression COND expression COLON expression         # conditional
-    | <assoc=right> extstart ( ASSIGN | AADD | ASUB | AMUL | ADIV
-                                      | AREM | AAND | AXOR | AOR
-                                      | ALSH | ARSH | AUSH ) expression # assignment
+delimiter
+    : SEMICOLON
+    | EOF
+    // RBRACK is a delimiter but we don't consume it because it is only valid
+    // in places where RBRACK can follow the statement. It is simpler to not
+    // consume it here then it is to consume it here. Unfortunately, they
+    // obvious syntax to do this `| { _input.LA(1) == RBRACK }?` generates an
+    // amazingly intense `adaptivePredict` call that doesn't actually work
+    // and builds a serious DFA. Huge. So instead we use standard ANTLR syntax
+    // to consume the token and then undo the consumption. This looks hairy but
+    // it is better than the alternatives.
+    |   { int mark = _input.mark(); int index = _input.index(); }
+            RBRACK
+        { _input.seek(index); _input.release(mark); }
     ;
 
-extstart
-    : extprec
-    | extcast
-    | exttype
-    | extvar
-    | extnew
-    | extstring
+// Note we return the boolean s.  This is returned as true
+// if secondaries (postfixes) are allowed, otherwise, false.
+// This prevents illegal secondaries from being appended to
+// expressions using precedence that aren't variable/method chains.
+expression returns [boolean s = true]
+    :               u = unary[false]                                       { $s = $u.s; }           # single
+    |               expression ( MUL | DIV | REM ) expression              { $s = false; }          # binary
+    |               expression ( ADD | SUB ) expression                    { $s = false; }          # binary
+    |               expression ( FIND | MATCH ) expression                 { $s = false; }          # binary
+    |               expression ( LSH | RSH | USH ) expression              { $s = false; }          # binary
+    |               expression ( LT | LTE | GT | GTE ) expression          { $s = false; }          # comp
+    |               expression ( EQ | EQR | NE | NER ) expression          { $s = false; }          # comp
+    |               expression BWAND expression                            { $s = false; }          # binary
+    |               expression XOR expression                              { $s = false; }          # binary
+    |               expression BWOR expression                             { $s = false; }          # binary
+    |               expression BOOLAND expression                          { $s = false; }          # bool
+    |               expression BOOLOR expression                           { $s = false; }          # bool
+    | <assoc=right> expression COND e0 = expression COLON e1 = expression  { $s = $e0.s && $e1.s; } # conditional
+    // TODO: Should we allow crazy syntax like (x = 5).call()?
+    //       Other crazy syntaxes work, but this one requires
+    //       a complete restructure of the rules as EChain isn't
+    //       designed to handle more postfixes after an assignment.
+    | <assoc=right> chain[true] ( ASSIGN | AADD | ASUB | AMUL |
+                                  ADIV   | AREM | AAND | AXOR |
+                                  AOR    | ALSH | ARSH | AUSH ) expression { $s = false; }         # assignment
     ;
 
-extprec:   LP ( extprec | extcast | exttype | extvar | extnew | extstring ) RP ( extdot | extbrace )?;
-extcast:   LP decltype RP ( extprec | extcast | exttype | extvar | extnew | extstring );
-extbrace:  LBRACE expression RBRACE ( extdot | extbrace )?;
-extdot:    DOT ( extcall | extfield );
-exttype:   TYPE extdot;
-extcall:   EXTID arguments ( extdot | extbrace )?;
-extvar:    ID ( extdot | extbrace )?;
-extfield:  ( EXTID | EXTINTEGER ) ( extdot | extbrace )?;
-extnew:    NEW TYPE ( ( arguments ( extdot | extbrace)? ) | ( ( LBRACE expression RBRACE )+ extdot? ) );
-extstring: STRING (extdot | extbrace )?;
+// Note we take in the boolean c.  This is used to indicate
+// whether or not this rule was called when we are already
+// processing a variable/method chain.  This prevents the chain
+// from being applied to rules where it wouldn't be allowed.
+unary[boolean c] returns [boolean s = true]
+    : { !$c }? ( INCR | DECR ) chain[true]                                  # pre
+    | { !$c }? chain[true] (INCR | DECR )                                   # post
+    | { !$c }? chain[false]                                                 # read
+    | { !$c }? ( OCTAL | HEX | INTEGER | DECIMAL )          { $s = false; } # numeric
+    | { !$c }? TRUE                                         { $s = false; } # true
+    | { !$c }? FALSE                                        { $s = false; } # false
+    | { !$c }? NULL                                         { $s = false; } # null
+    | { !$c }? ( BOOLNOT | BWNOT | ADD | SUB ) unary[false]                 # operator
+    |          LP decltype RP unary[$c]                                     # cast
+    ;
+
+chain[boolean c]
+    : p = primary[$c] secondary[$p.s]*                             # dynamic
+    | decltype dot secondary[true]*                                # static
+    | NEW TYPE (LBRACE expression RBRACE)+ (dot secondary[true]*)? # newarray
+    ;
+
+primary[boolean c] returns [boolean s = true]
+    : { !$c }? LP e = expression RP { $s = $e.s; } # exprprec
+    | { $c }?  LP unary[true] RP                   # chainprec
+    |          STRING                              # string
+    |          REGEX                               # regex
+    |          ID                                  # variable
+    |          ID arguments                        # calllocal
+    |          NEW TYPE arguments                  # newobject
+    ;
+
+secondary[boolean s]
+    : { $s }? dot
+    | { $s }? brace
+    ;
+
+dot
+    : DOT DOTID arguments        # callinvoke
+    | DOT ( DOTID | DOTINTEGER ) # fieldaccess
+    ;
+
+brace
+    : LBRACE expression RBRACE # braceaccess
+    ;
 
 arguments
-    : ( LP ( expression ( COMMA expression )* )? RP )
+    : ( LP ( argument ( COMMA argument )* )? RP )
     ;
 
-increment
-    : INCR
-    | DECR
+argument
+    : expression
+    | lambda
+    | funcref
+    ;
+
+lambda
+    : ( lamtype | LP ( lamtype ( COMMA lamtype )* )? RP ) ARROW block
+    ;
+
+lamtype
+    : decltype? ID
+    ;
+
+funcref
+    : classFuncref
+    | constructorFuncref
+    | capturingFuncref
+    | localFuncref
+    ;
+
+// reference to a static or instance method, e.g. ArrayList::size or Integer::compare
+classFuncref
+    : TYPE REF ID
+    ;
+
+// reference to a constructor, e.g. ArrayList::new
+// currently limited to simple non-array types
+constructorFuncref
+    : decltype REF NEW
+    ;
+
+// reference to an instance method, e.g. object::toString
+// currently limited to capture of a simple variable (id).
+capturingFuncref
+    : ID REF ID
+    ;
+
+// reference to a local function, e.g. this::myfunc
+localFuncref
+    : THIS REF ID
     ;

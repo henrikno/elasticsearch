@@ -23,6 +23,7 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 
 import java.io.IOException;
@@ -46,15 +47,16 @@ import static org.elasticsearch.common.Strings.cleanPath;
 // TODO: move PathUtils to be package-private here instead of
 // public+forbidden api!
 public class Environment {
-    public static final Setting<String> PATH_HOME_SETTING = Setting.simpleString("path.home", false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PATH_CONF_SETTING = Setting.simpleString("path.conf", false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PATH_SCRIPTS_SETTING = Setting.simpleString("path.scripts", false, Setting.Scope.CLUSTER);
-    public static final Setting<List<String>> PATH_DATA_SETTING = Setting.listSetting("path.data", Collections.emptyList(), Function.identity(), false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PATH_LOGS_SETTING = Setting.simpleString("path.logs", false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PATH_PLUGINS_SETTING = Setting.simpleString("path.plugins", false, Setting.Scope.CLUSTER);
-    public static final Setting<List<String>> PATH_REPO_SETTING = Setting.listSetting("path.repo", Collections.emptyList(), Function.identity(), false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PATH_SHARED_DATA_SETTING = Setting.simpleString("path.shared_data", false, Setting.Scope.CLUSTER);
-    public static final Setting<String> PIDFILE_SETTING = Setting.simpleString("pidfile", false, Setting.Scope.CLUSTER);
+    public static final Setting<String> PATH_HOME_SETTING = Setting.simpleString("path.home", Property.NodeScope);
+    public static final Setting<String> PATH_CONF_SETTING = Setting.simpleString("path.conf", Property.NodeScope);
+    public static final Setting<String> PATH_SCRIPTS_SETTING = Setting.simpleString("path.scripts", Property.NodeScope);
+    public static final Setting<List<String>> PATH_DATA_SETTING =
+        Setting.listSetting("path.data", Collections.emptyList(), Function.identity(), Property.NodeScope);
+    public static final Setting<String> PATH_LOGS_SETTING = Setting.simpleString("path.logs", Property.NodeScope);
+    public static final Setting<List<String>> PATH_REPO_SETTING =
+        Setting.listSetting("path.repo", Collections.emptyList(), Function.identity(), Property.NodeScope);
+    public static final Setting<String> PATH_SHARED_DATA_SETTING = Setting.simpleString("path.shared_data", Property.NodeScope);
+    public static final Setting<String> PIDFILE_SETTING = Setting.simpleString("pidfile", Property.NodeScope);
 
     private final Settings settings;
 
@@ -125,11 +127,7 @@ public class Environment {
             scriptsFile = configFile.resolve("scripts");
         }
 
-        if (PATH_PLUGINS_SETTING.exists(settings)) {
-            pluginsFile = PathUtils.get(cleanPath(PATH_PLUGINS_SETTING.get(settings)));
-        } else {
-            pluginsFile = homeFile.resolve("plugins");
-        }
+        pluginsFile = homeFile.resolve("plugins");
 
         List<String> dataPaths = PATH_DATA_SETTING.get(settings);
         if (dataPaths.isEmpty() == false) {
@@ -197,7 +195,11 @@ public class Environment {
 
     /**
      * The data location with the cluster name as a sub directory.
+     *
+     * @deprecated Used to upgrade old data paths to new ones that do not include the cluster name, should not be used to write files to and
+     * will be removed in ES 6.0
      */
+    @Deprecated
     public Path[] dataWithClusterFiles() {
         return dataWithClusterFiles;
     }

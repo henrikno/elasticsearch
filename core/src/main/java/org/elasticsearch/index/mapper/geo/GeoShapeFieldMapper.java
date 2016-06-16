@@ -18,11 +18,12 @@
  */
 package org.elasticsearch.index.mapper.geo;
 
-import com.spatial4j.core.shape.Point;
-import com.spatial4j.core.shape.Shape;
-import com.spatial4j.core.shape.jts.JtsGeometry;
+import org.locationtech.spatial4j.shape.Point;
+import org.locationtech.spatial4j.shape.Shape;
+import org.locationtech.spatial4j.shape.jts.JtsGeometry;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.search.Query;
 import org.apache.lucene.spatial.prefix.PrefixTreeStrategy;
 import org.apache.lucene.spatial.prefix.RecursivePrefixTreeStrategy;
 import org.apache.lucene.spatial.prefix.TermQueryPrefixTreeStrategy;
@@ -30,6 +31,7 @@ import org.apache.lucene.spatial.prefix.tree.GeohashPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.PackedQuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.QuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
+import org.elasticsearch.Version;
 import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.geo.GeoUtils;
@@ -45,7 +47,8 @@ import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.ParseContext;
-import org.elasticsearch.index.mapper.core.DoubleFieldMapper;
+import org.elasticsearch.index.query.QueryShardContext;
+import org.elasticsearch.index.query.QueryShardException;
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -57,10 +60,10 @@ import static org.elasticsearch.common.xcontent.support.XContentMapValues.lenien
 
 
 /**
- * FieldMapper for indexing {@link com.spatial4j.core.shape.Shape}s.
+ * FieldMapper for indexing {@link org.locationtech.spatial4j.shape.Shape}s.
  * <p>
  * Currently Shapes can only be indexed and can only be queried using
- * {@link org.elasticsearch.index.query.GeoShapeQueryParser}, consequently
+ * {@link org.elasticsearch.index.query.GeoShapeQueryBuilder}, consequently
  * a lot of behavior in this Mapper is disabled.
  * <p>
  * Format supported:
@@ -163,7 +166,7 @@ public class GeoShapeFieldMapper extends FieldMapper {
             Builder builder = new Builder(name);
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
-                String fieldName = Strings.toUnderscoreCase(entry.getKey());
+                String fieldName = entry.getKey();
                 Object fieldNode = entry.getValue();
                 if (Names.TREE.equals(fieldName)) {
                     builder.fieldType().setTree(fieldNode.toString());
@@ -413,10 +416,9 @@ public class GeoShapeFieldMapper extends FieldMapper {
         }
 
         @Override
-        public String value(Object value) {
-            throw new UnsupportedOperationException("GeoShape fields cannot be converted to String values");
+        public Query termQuery(Object value, QueryShardContext context) {
+            throw new QueryShardException(context, "Geo fields do not support exact searching, use dedicated geo queries instead");
         }
-
     }
 
     protected Explicit<Boolean> coerce;
@@ -452,7 +454,8 @@ public class GeoShapeFieldMapper extends FieldMapper {
                 return null;
             }
             for (Field field : fields) {
-                if (!customBoost()) {
+                if (!customBoost() &&
+                    fieldType.boost() != 1f && Version.indexCreated(context.indexSettings()).before(Version.V_5_0_0_alpha1)) {
                     field.setBoost(fieldType().boost());
                 }
                 context.doc().add(field);

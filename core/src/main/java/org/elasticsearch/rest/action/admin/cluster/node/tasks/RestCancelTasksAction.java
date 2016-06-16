@@ -19,9 +19,11 @@
 
 package org.elasticsearch.rest.action.admin.cluster.node.tasks;
 
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
-import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksRequest;
+import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksResponse;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
@@ -30,33 +32,41 @@ import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.action.support.RestToXContentListener;
+import org.elasticsearch.tasks.TaskId;
 
 import static org.elasticsearch.rest.RestRequest.Method.POST;
+import static org.elasticsearch.rest.action.admin.cluster.node.tasks.RestListTasksAction.nodeSettingListener;
 
 
 public class RestCancelTasksAction extends BaseRestHandler {
+    private final ClusterService clusterService;
 
     @Inject
-    public RestCancelTasksAction(Settings settings, RestController controller, Client client) {
+    public RestCancelTasksAction(Settings settings, RestController controller, Client client, ClusterService clusterService) {
         super(settings, client);
+        this.clusterService = clusterService;
         controller.registerHandler(POST, "/_tasks/_cancel", this);
-        controller.registerHandler(POST, "/_tasks/{nodeId}/_cancel", this);
-        controller.registerHandler(POST, "/_tasks/{nodeId}/{taskId}/_cancel", this);
+        controller.registerHandler(POST, "/_tasks/{taskId}/_cancel", this);
     }
 
     @Override
     public void handleRequest(final RestRequest request, final RestChannel channel, final Client client) {
         String[] nodesIds = Strings.splitStringByCommaToArray(request.param("nodeId"));
-        long taskId = request.paramAsLong("taskId", ListTasksRequest.ALL_TASKS);
+        TaskId taskId = new TaskId(request.param("taskId"));
         String[] actions = Strings.splitStringByCommaToArray(request.param("actions"));
-        String parentNode = request.param("parent_node");
-        long parentTaskId = request.paramAsLong("parent_task", ListTasksRequest.ALL_TASKS);
+        TaskId parentTaskId = new TaskId(request.param("parent_task_id"));
 
-        CancelTasksRequest cancelTasksRequest = new CancelTasksRequest(nodesIds);
-        cancelTasksRequest.taskId(taskId);
-        cancelTasksRequest.actions(actions);
-        cancelTasksRequest.parentNode(parentNode);
-        cancelTasksRequest.parentTaskId(parentTaskId);
-        client.admin().cluster().cancelTasks(cancelTasksRequest, new RestToXContentListener<>(channel));
+        CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
+        cancelTasksRequest.setTaskId(taskId);
+        cancelTasksRequest.setNodesIds(nodesIds);
+        cancelTasksRequest.setActions(actions);
+        cancelTasksRequest.setParentTaskId(parentTaskId);
+        ActionListener<CancelTasksResponse> listener = nodeSettingListener(clusterService, new RestToXContentListener<>(channel));
+        client.admin().cluster().cancelTasks(cancelTasksRequest, listener);
+    }
+
+    @Override
+    public boolean canTripCircuitBreaker() {
+        return false;
     }
 }

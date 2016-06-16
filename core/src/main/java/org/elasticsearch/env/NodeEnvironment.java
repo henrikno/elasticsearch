@@ -32,11 +32,14 @@ import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.SuppressForbidden;
+import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.FileSystemUtils;
+import org.elasticsearch.common.logging.DeprecationLogger;
+import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.settings.Setting;
-import org.elasticsearch.common.settings.Setting.Scope;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.unit.TimeValue;
@@ -49,7 +52,6 @@ import org.elasticsearch.index.store.FsDirectoryService;
 import org.elasticsearch.monitor.fs.FsInfo;
 import org.elasticsearch.monitor.fs.FsProbe;
 import org.elasticsearch.monitor.jvm.JvmInfo;
-import org.elasticsearch.monitor.process.ProcessProbe;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -64,14 +66,13 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 import static java.util.Collections.unmodifiableSet;
 
@@ -90,29 +91,38 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
          *  not running on Linux, or we hit an exception trying), True means the device possibly spins and False means it does not. */
         public final Boolean spins;
 
-        public NodePath(Path path, Environment environment) throws IOException {
+        public final int majorDeviceNumber;
+        public final int minorDeviceNumber;
+
+        public NodePath(Path path) throws IOException {
             this.path = path;
             this.indicesPath = path.resolve(INDICES_FOLDER);
             this.fileStore = Environment.getFileStore(path);
             if (fileStore.supportsFileAttributeView("lucene")) {
                 this.spins = (Boolean) fileStore.getAttribute("lucene:spins");
+                this.majorDeviceNumber = (int) fileStore.getAttribute("lucene:major_device_number");
+                this.minorDeviceNumber = (int) fileStore.getAttribute("lucene:minor_device_number");
             } else {
                 this.spins = null;
+                this.majorDeviceNumber = -1;
+                this.minorDeviceNumber = -1;
             }
         }
 
         /**
          * Resolves the given shards directory against this NodePath
+         * ${data.paths}/nodes/{node.id}/indices/{index.uuid}/{shard.id}
          */
         public Path resolve(ShardId shardId) {
             return resolve(shardId.getIndex()).resolve(Integer.toString(shardId.id()));
         }
 
         /**
-         * Resolves the given indexes directory against this NodePath
+         * Resolves index directory against this NodePath
+         * ${data.paths}/nodes/{node.id}/indices/{index.uuid}
          */
         public Path resolve(Index index) {
-            return indicesPath.resolve(index.getName());
+            return indicesPath.resolve(index.getUUID());
         }
 
         @Override
@@ -132,29 +142,30 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
 
     private final int localNodeId;
     private final AtomicBoolean closed = new AtomicBoolean(false);
-    private final Map<ShardLockKey, InternalShardLock> shardLocks = new HashMap<>();
+    private final Map<ShardId, InternalShardLock> shardLocks = new HashMap<>();
 
     /**
      * Maximum number of data nodes that should run in an environment.
      */
-    public static final Setting<Integer> MAX_LOCAL_STORAGE_NODES_SETTING = Setting.intSetting("node.max_local_storage_nodes", 50, 1, false,
-            Scope.CLUSTER);
+    public static final Setting<Integer> MAX_LOCAL_STORAGE_NODES_SETTING = Setting.intSetting("node.max_local_storage_nodes", 50, 1,
+            Property.NodeScope);
 
     /**
      * If true automatically append node id to custom data paths.
      */
-    public static final Setting<Boolean> ADD_NODE_ID_TO_CUSTOM_PATH = Setting.boolSetting("node.add_id_to_custom_path", true, false,
-            Scope.CLUSTER);
+    public static final Setting<Boolean> ADD_NODE_ID_TO_CUSTOM_PATH =
+        Setting.boolSetting("node.add_id_to_custom_path", true, Property.NodeScope);
 
     /**
      * If true the [verbose] SegmentInfos.infoStream logging is sent to System.out.
      */
-    public static final Setting<Boolean> ENABLE_LUCENE_SEGMENT_INFOS_TRACE_SETTING = Setting
-            .boolSetting("node.enable_lucene_segment_infos_trace", false, false, Scope.CLUSTER);
+    public static final Setting<Boolean> ENABLE_LUCENE_SEGMENT_INFOS_TRACE_SETTING =
+        Setting.boolSetting("node.enable_lucene_segment_infos_trace", false, Property.NodeScope);
 
     public static final String NODES_FOLDER = "nodes";
     public static final String INDICES_FOLDER = "indices";
     public static final String NODE_LOCK_FILENAME = "node.lock";
+    public static final String UPGRADE_LOCK_FILENAME = "upgrade.lock";
 
     @Inject
     public NodeEnvironment(Settings settings, Environment environment) throws IOException {
@@ -169,7 +180,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
             localNodeId = -1;
             return;
         }
-        final NodePath[] nodePaths = new NodePath[environment.dataWithClusterFiles().length];
+        final NodePath[] nodePaths = new NodePath[environment.dataFiles().length];
         final Lock[] locks = new Lock[nodePaths.length];
         boolean success = false;
 
@@ -179,15 +190,24 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
             IOException lastException = null;
             int maxLocalStorageNodes = MAX_LOCAL_STORAGE_NODES_SETTING.get(settings);
             for (int possibleLockId = 0; possibleLockId < maxLocalStorageNodes; possibleLockId++) {
-                for (int dirIndex = 0; dirIndex < environment.dataWithClusterFiles().length; dirIndex++) {
-                    Path dir = environment.dataWithClusterFiles()[dirIndex].resolve(NODES_FOLDER).resolve(Integer.toString(possibleLockId));
+                for (int dirIndex = 0; dirIndex < environment.dataFiles().length; dirIndex++) {
+                    Path dataDirWithClusterName = environment.dataWithClusterFiles()[dirIndex];
+                    Path dataDir = environment.dataFiles()[dirIndex];
+                    // TODO: Remove this in 6.0, we are no longer going to read from the cluster name directory
+                    if (readFromDataPathWithClusterName(dataDirWithClusterName)) {
+                        DeprecationLogger deprecationLogger = new DeprecationLogger(logger);
+                        deprecationLogger.deprecated("ES has detected the [path.data] folder using the cluster name as a folder [{}], " +
+                                        "Elasticsearch 6.0 will not allow the cluster name as a folder within the data path", dataDir);
+                        dataDir = dataDirWithClusterName;
+                    }
+                    Path dir = dataDir.resolve(NODES_FOLDER).resolve(Integer.toString(possibleLockId));
                     Files.createDirectories(dir);
 
                     try (Directory luceneDir = FSDirectory.open(dir, NativeFSLockFactory.INSTANCE)) {
                         logger.trace("obtaining node lock on {} ...", dir.toAbsolutePath());
                         try {
                             locks[dirIndex] = luceneDir.obtainLock(NODE_LOCK_FILENAME);
-                            nodePaths[dirIndex] = new NodePath(dir, environment);
+                            nodePaths[dirIndex] = new NodePath(dir);
                             localNodeId = possibleLockId;
                         } catch (LockObtainFailedException ex) {
                             logger.trace("failed to obtain node lock on {}", dir.toAbsolutePath());
@@ -212,7 +232,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
 
             if (locks[0] == null) {
                 throw new IllegalStateException("Failed to obtain node lock, is the following location writable?: "
-                    + Arrays.toString(environment.dataWithClusterFiles()), lastException);
+                    + Arrays.toString(environment.dataFiles()), lastException);
             }
 
             this.localNodeId = localNodeId;
@@ -225,7 +245,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
 
             maybeLogPathDetails();
             maybeLogHeapDetails();
-            
+
             applySegmentInfosTrace(settings);
             assertCanWrite();
             success = true;
@@ -234,6 +254,32 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
                 IOUtils.closeWhileHandlingException(locks);
             }
         }
+    }
+
+    /** Returns true if the directory is empty */
+    private static boolean dirEmpty(final Path path) throws IOException {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
+            return stream.iterator().hasNext() == false;
+        }
+    }
+
+    // Visible for testing
+    /** Returns true if data should be read from the data path that includes the cluster name (ie, it has data in it) */
+    static boolean readFromDataPathWithClusterName(Path dataPathWithClusterName) throws IOException {
+        if (Files.exists(dataPathWithClusterName) == false ||          // If it doesn't exist
+                Files.isDirectory(dataPathWithClusterName) == false || // Or isn't a directory
+                dirEmpty(dataPathWithClusterName)) {                   // Or if it's empty
+            // No need to read from cluster-name folder!
+            return false;
+        }
+        // The "nodes" directory inside of the cluster name
+        Path nodesPath = dataPathWithClusterName.resolve(NODES_FOLDER);
+        if (Files.isDirectory(nodesPath)) {
+            // The cluster has data in the "nodes" so we should read from the cluster-named folder for now
+            return true;
+        }
+        // Hey the nodes directory didn't exist, so we can safely use whatever directory we feel appropriate
+        return false;
     }
 
     private static void releaseAndNullLocks(Lock[] locks) {
@@ -250,7 +296,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
         // We do some I/O in here, so skip this if DEBUG/INFO are not enabled:
         if (logger.isDebugEnabled()) {
             // Log one line per path.data:
-            StringBuilder sb = new StringBuilder("node data locations details:");
+            StringBuilder sb = new StringBuilder();
             for (NodePath nodePath : nodePaths) {
                 sb.append('\n').append(" -> ").append(nodePath.path.toAbsolutePath());
 
@@ -278,7 +324,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
                     .append(fsPath.getType())
                     .append(']');
             }
-            logger.debug(sb.toString());
+            logger.debug("node data locations details:{}", sb);
         } else if (logger.isInfoEnabled()) {
             FsInfo.Path totFSPath = new FsInfo.Path();
             Set<String> allTypes = new HashSet<>();
@@ -306,14 +352,8 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
             }
 
             // Just log a 1-line summary:
-            logger.info(String.format(Locale.ROOT,
-                                      "using [%d] data paths, mounts [%s], net usable_space [%s], net total_space [%s], spins? [%s], types [%s]",
-                                      nodePaths.length,
-                                      allMounts,
-                                      totFSPath.getAvailable(),
-                                      totFSPath.getTotal(),
-                                      toString(allSpins),
-                                      toString(allTypes)));
+            logger.info("using [{}] data paths, mounts [{}], net usable_space [{}], net total_space [{}], spins? [{}], types [{}]",
+                nodePaths.length, allMounts, totFSPath.getAvailable(), totFSPath.getTotal(), toString(allSpins), toString(allTypes));
         }
     }
 
@@ -452,11 +492,11 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      * @param indexSettings settings for the index being deleted
      */
     public void deleteIndexDirectoryUnderLock(Index index, IndexSettings indexSettings) throws IOException {
-        final Path[] indexPaths = indexPaths(index.getName());
+        final Path[] indexPaths = indexPaths(index);
         logger.trace("deleting index {} directory, paths({}): [{}]", index, indexPaths.length, indexPaths);
         IOUtils.rm(indexPaths);
         if (indexSettings.hasCustomDataPath()) {
-            Path customLocation = resolveCustomLocation(indexSettings, index.getName());
+            Path customLocation = resolveIndexCustomLocation(indexSettings);
             logger.trace("deleting custom index {} directory [{}]", index, customLocation);
             IOUtils.rm(customLocation);
         }
@@ -524,17 +564,16 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      */
     public ShardLock shardLock(final ShardId shardId, long lockTimeoutMS) throws IOException {
         logger.trace("acquiring node shardlock on [{}], timeout [{}]", shardId, lockTimeoutMS);
-        final ShardLockKey shardLockKey = new ShardLockKey(shardId);
         final InternalShardLock shardLock;
         final boolean acquired;
         synchronized (shardLocks) {
-            if (shardLocks.containsKey(shardLockKey)) {
-                shardLock = shardLocks.get(shardLockKey);
+            if (shardLocks.containsKey(shardId)) {
+                shardLock = shardLocks.get(shardId);
                 shardLock.incWaitCount();
                 acquired = false;
             } else {
-                shardLock = new InternalShardLock(shardLockKey);
-                shardLocks.put(shardLockKey, shardLock);
+                shardLock = new InternalShardLock(shardId);
+                shardLocks.put(shardId, shardLock);
                 acquired = true;
             }
         }
@@ -554,7 +593,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
             @Override
             protected void closeInternal() {
                 shardLock.release();
-                logger.trace("released shard lock for [{}]", shardLockKey);
+                logger.trace("released shard lock for [{}]", shardId);
             }
         };
     }
@@ -566,51 +605,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      */
     public Set<ShardId> lockedShards() {
         synchronized (shardLocks) {
-            Set<ShardId> lockedShards = shardLocks.keySet().stream()
-                    .map(shardLockKey -> new ShardId(new Index(shardLockKey.indexName, "_na_"), shardLockKey.shardId)).collect(Collectors.toSet());
-            return unmodifiableSet(lockedShards);
-        }
-    }
-
-    // a key for the shard lock. we can't use shardIds, because the contain
-    // the index uuid, but we want the lock semantics to the same as we map indices to disk folders, i.e., without the uuid (for now).
-    private final class ShardLockKey {
-        final String indexName;
-        final int shardId;
-
-        public ShardLockKey(final ShardId shardId) {
-            this.indexName = shardId.getIndexName();
-            this.shardId = shardId.id();
-        }
-
-        @Override
-        public String toString() {
-            return "[" + indexName + "][" + shardId + "]";
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-
-            ShardLockKey that = (ShardLockKey) o;
-
-            if (shardId != that.shardId) {
-                return false;
-            }
-            return indexName.equals(that.indexName);
-
-        }
-
-        @Override
-        public int hashCode() {
-            int result = indexName.hashCode();
-            result = 31 * result + shardId;
-            return result;
+            return unmodifiableSet(new HashSet<>(shardLocks.keySet()));
         }
     }
 
@@ -623,10 +618,10 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
          */
         private final Semaphore mutex = new Semaphore(1);
         private int waitCount = 1; // guarded by shardLocks
-        private final ShardLockKey lockKey;
+        private final ShardId shardId;
 
-        InternalShardLock(ShardLockKey id) {
-            lockKey = id;
+        InternalShardLock(ShardId shardId) {
+            this.shardId = shardId;
             mutex.acquireUninterruptibly();
         }
 
@@ -646,10 +641,10 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
             synchronized (shardLocks) {
                 assert waitCount > 0 : "waitCount is " + waitCount + " but should be > 0";
                 --waitCount;
-                logger.trace("shard lock wait count for [{}] is now [{}]", lockKey, waitCount);
+                logger.trace("shard lock wait count for {} is now [{}]", shardId, waitCount);
                 if (waitCount == 0) {
-                    logger.trace("last shard lock wait decremented, removing lock for [{}]", lockKey);
-                    InternalShardLock remove = shardLocks.remove(lockKey);
+                    logger.trace("last shard lock wait decremented, removing lock for {}", shardId);
+                    InternalShardLock remove = shardLocks.remove(shardId);
                     assert remove != null : "Removed lock was null";
                 }
             }
@@ -658,11 +653,11 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
         void acquire(long timeoutInMillis) throws LockObtainFailedException{
             try {
                 if (mutex.tryAcquire(timeoutInMillis, TimeUnit.MILLISECONDS) == false) {
-                    throw new LockObtainFailedException("Can't lock shard " + lockKey + ", timed out after " + timeoutInMillis + "ms");
+                    throw new LockObtainFailedException("Can't lock shard " + shardId + ", timed out after " + timeoutInMillis + "ms");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new LockObtainFailedException("Can't lock shard " + lockKey + ", interrupted", e);
+                throw new LockObtainFailedException("Can't lock shard " + shardId + ", interrupted", e);
             }
         }
     }
@@ -705,11 +700,11 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
     /**
      * Returns all index paths.
      */
-    public Path[] indexPaths(String indexName) {
+    public Path[] indexPaths(Index index) {
         assert assertEnvIsLocked();
         Path[] indexPaths = new Path[nodePaths.length];
         for (int i = 0; i < nodePaths.length; i++) {
-            indexPaths[i] = nodePaths[i].indicesPath.resolve(indexName);
+            indexPaths[i] = nodePaths[i].resolve(index);
         }
         return indexPaths;
     }
@@ -732,25 +727,47 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
         return shardLocations;
     }
 
-    public Set<String> findAllIndices() throws IOException {
+    /**
+     * Returns all folder names in ${data.paths}/nodes/{node.id}/indices folder
+     */
+    public Set<String> availableIndexFolders() throws IOException {
         if (nodePaths == null || locks == null) {
             throw new IllegalStateException("node is not configured to store local location");
         }
         assert assertEnvIsLocked();
-        Set<String> indices = new HashSet<>();
+        Set<String> indexFolders = new HashSet<>();
         for (NodePath nodePath : nodePaths) {
             Path indicesLocation = nodePath.indicesPath;
             if (Files.isDirectory(indicesLocation)) {
                 try (DirectoryStream<Path> stream = Files.newDirectoryStream(indicesLocation)) {
                     for (Path index : stream) {
                         if (Files.isDirectory(index)) {
-                            indices.add(index.getFileName().toString());
+                            indexFolders.add(index.getFileName().toString());
                         }
                     }
                 }
             }
         }
-        return indices;
+        return indexFolders;
+
+    }
+
+    /**
+     * Resolves all existing paths to <code>indexFolderName</code> in ${data.paths}/nodes/{node.id}/indices
+     */
+    public Path[] resolveIndexFolder(String indexFolderName) throws IOException {
+        if (nodePaths == null || locks == null) {
+            throw new IllegalStateException("node is not configured to store local location");
+        }
+        assert assertEnvIsLocked();
+        List<Path> paths = new ArrayList<>(nodePaths.length);
+        for (NodePath nodePath : nodePaths) {
+            Path indexFolder = nodePath.indicesPath.resolve(indexFolderName);
+            if (Files.exists(indexFolder)) {
+                paths.add(indexFolder);
+            }
+        }
+        return paths.toArray(new Path[paths.size()]);
     }
 
     /**
@@ -768,13 +785,13 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
         }
         assert assertEnvIsLocked();
         final Set<ShardId> shardIds = new HashSet<>();
-        String indexName = index.getName();
+        final String indexUniquePathId = index.getUUID();
         for (final NodePath nodePath : nodePaths) {
             Path location = nodePath.indicesPath;
             if (Files.isDirectory(location)) {
                 try (DirectoryStream<Path> indexStream = Files.newDirectoryStream(location)) {
                     for (Path indexPath : indexStream) {
-                        if (indexName.equals(indexPath.getFileName().toString())) {
+                        if (indexUniquePathId.equals(indexPath.getFileName().toString())) {
                             shardIds.addAll(findAllShardsForIndex(indexPath, index));
                         }
                     }
@@ -785,7 +802,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
     }
 
     private static Set<ShardId> findAllShardsForIndex(Path indexPath, Index index) throws IOException {
-        assert indexPath.getFileName().toString().equals(index.getName());
+        assert indexPath.getFileName().toString().equals(index.getUUID());
         Set<ShardId> shardIds = new HashSet<>();
         if (Files.isDirectory(indexPath)) {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(indexPath)) {
@@ -868,7 +885,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      *
      * @param indexSettings settings for the index
      */
-    private Path resolveCustomLocation(IndexSettings indexSettings) {
+    public Path resolveBaseCustomLocation(IndexSettings indexSettings) {
         String customDataDir = indexSettings.customDataPath();
         if (customDataDir != null) {
             // This assert is because this should be caught by MetaDataCreateIndexService
@@ -889,10 +906,9 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      * the root path for the index.
      *
      * @param indexSettings settings for the index
-     * @param indexName index to resolve the path for
      */
-    private Path resolveCustomLocation(IndexSettings indexSettings, final String indexName) {
-        return resolveCustomLocation(indexSettings).resolve(indexName);
+    private Path resolveIndexCustomLocation(IndexSettings indexSettings) {
+        return resolveBaseCustomLocation(indexSettings).resolve(indexSettings.getUUID());
     }
 
     /**
@@ -904,7 +920,7 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
      * @param shardId shard to resolve the path to
      */
     public Path resolveCustomLocation(IndexSettings indexSettings, final ShardId shardId) {
-        return resolveCustomLocation(indexSettings, shardId.getIndexName()).resolve(Integer.toString(shardId.id()));
+        return resolveIndexCustomLocation(indexSettings).resolve(Integer.toString(shardId.id()));
     }
 
     /**
@@ -928,22 +944,24 @@ public final class NodeEnvironment extends AbstractComponent implements Closeabl
         for (Path path : nodeDataPaths()) { // check node-paths are writable
             tryWriteTempFile(path);
         }
-        for (String index : this.findAllIndices()) {
-            for (Path path : this.indexPaths(index)) { // check index paths are writable
-                Path statePath = path.resolve(MetaDataStateFormat.STATE_DIR_NAME);
-                tryWriteTempFile(statePath);
-                tryWriteTempFile(path);
-            }
-            for (ShardId shardID : this.findAllShardIds(new Index(index, IndexMetaData.INDEX_UUID_NA_VALUE))) {
-                Path[] paths = this.availableShardPaths(shardID);
-                for (Path path : paths) { // check shard paths are writable
-                    Path indexDir = path.resolve(ShardPath.INDEX_FOLDER_NAME);
-                    Path statePath = path.resolve(MetaDataStateFormat.STATE_DIR_NAME);
-                    Path translogDir = path.resolve(ShardPath.TRANSLOG_FOLDER_NAME);
-                    tryWriteTempFile(indexDir);
-                    tryWriteTempFile(translogDir);
-                    tryWriteTempFile(statePath);
-                    tryWriteTempFile(path);
+        for (String indexFolderName : this.availableIndexFolders()) {
+            for (Path indexPath : this.resolveIndexFolder(indexFolderName)) { // check index paths are writable
+                Path indexStatePath = indexPath.resolve(MetaDataStateFormat.STATE_DIR_NAME);
+                tryWriteTempFile(indexStatePath);
+                tryWriteTempFile(indexPath);
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(indexPath)) {
+                    for (Path shardPath : stream) {
+                        String fileName = shardPath.getFileName().toString();
+                        if (Files.isDirectory(shardPath) && fileName.chars().allMatch(Character::isDigit)) {
+                            Path indexDir = shardPath.resolve(ShardPath.INDEX_FOLDER_NAME);
+                            Path statePath = shardPath.resolve(MetaDataStateFormat.STATE_DIR_NAME);
+                            Path translogDir = shardPath.resolve(ShardPath.TRANSLOG_FOLDER_NAME);
+                            tryWriteTempFile(indexDir);
+                            tryWriteTempFile(translogDir);
+                            tryWriteTempFile(statePath);
+                            tryWriteTempFile(shardPath);
+                        }
+                    }
                 }
             }
         }

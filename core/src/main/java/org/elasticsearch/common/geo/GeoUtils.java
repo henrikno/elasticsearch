@@ -28,7 +28,6 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentParser.Token;
 import org.elasticsearch.index.mapper.geo.GeoPointFieldMapper;
 
-import static org.apache.lucene.spatial.util.GeoDistanceUtils.maxRadialDistanceMeters;
 
 import java.io.IOException;
 
@@ -67,11 +66,14 @@ public class GeoUtils {
     /** Earth ellipsoid polar distance in meters */
     public static final double EARTH_POLAR_DISTANCE = Math.PI * EARTH_SEMI_MINOR_AXIS;
 
+    /** rounding error for quantized latitude and longitude values */
+    public static final double TOLERANCE = 1E-6;
+
     /** Returns the minimum between the provided distance 'initialRadius' and the
      * maximum distance/radius from the point 'center' before overlapping
      **/
     public static double maxRadialDistance(GeoPoint center, double initialRadius) {
-        final double maxRadius = maxRadialDistanceMeters(center.lon(), center.lat());
+        final double maxRadius = maxRadialDistanceMeters(center.lat(), center.lon());
         return Math.min(initialRadius, maxRadius);
     }
 
@@ -89,14 +91,6 @@ public class GeoUtils {
             return false;
         }
         return true;
-    }
-
-    /**
-     * Return an approximate value of the diameter of the earth (in meters) at the given latitude (in radians).
-     */
-    public static double earthDiameter(double latitude) {
-        // SloppyMath impl returns a result in kilometers
-        return SloppyMath.earthDiameter(latitude) * 1000;
     }
 
     /**
@@ -374,6 +368,7 @@ public class GeoUtils {
         double lat = Double.NaN;
         double lon = Double.NaN;
         String geohash = null;
+        NumberFormatException numberFormatException = null;
 
         if(parser.currentToken() == Token.START_OBJECT) {
             while(parser.nextToken() != Token.END_OBJECT) {
@@ -384,7 +379,11 @@ public class GeoUtils {
                         switch (parser.currentToken()) {
                             case VALUE_NUMBER:
                             case VALUE_STRING:
-                                lat = parser.doubleValue(true);
+                                try {
+                                    lat = parser.doubleValue(true);
+                                } catch (NumberFormatException e) {
+                                    numberFormatException = e;
+                                }
                                 break;
                             default:
                                 throw new ElasticsearchParseException("latitude must be a number");
@@ -394,7 +393,11 @@ public class GeoUtils {
                         switch (parser.currentToken()) {
                             case VALUE_NUMBER:
                             case VALUE_STRING:
-                                lon = parser.doubleValue(true);
+                                try {
+                                    lon = parser.doubleValue(true);
+                                } catch (NumberFormatException e) {
+                                    numberFormatException = e;
+                                }
                                 break;
                             default:
                                 throw new ElasticsearchParseException("longitude must be a number");
@@ -419,6 +422,9 @@ public class GeoUtils {
                 } else {
                     return point.resetFromGeoHash(geohash);
                 }
+            } else if (numberFormatException != null) {
+                throw new ElasticsearchParseException("[{}] and [{}] must be valid double values", numberFormatException, LATITUDE,
+                    LONGITUDE);
             } else if (Double.isNaN(lat)) {
                 throw new ElasticsearchParseException("field [{}] missing", LATITUDE);
             } else if (Double.isNaN(lon)) {
@@ -462,6 +468,14 @@ public class GeoUtils {
         } else {
             return point.resetFromGeoHash(data);
         }
+    }
+
+    /** Returns the maximum distance/radius (in meters) from the point 'center' before overlapping */
+    public static double maxRadialDistanceMeters(final double centerLat, final double centerLon) {
+      if (Math.abs(centerLat) == MAX_LAT) {
+        return SloppyMath.haversinMeters(centerLat, centerLon, 0, centerLon);
+      }
+      return SloppyMath.haversinMeters(centerLat, centerLon, centerLat, (MAX_LON + centerLon) % 360);
     }
 
     private GeoUtils() {

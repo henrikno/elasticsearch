@@ -25,8 +25,8 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ObjectParser;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.query.MatchAllQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.index.query.QueryShardContext;
 import org.elasticsearch.search.rescore.QueryRescorer.QueryRescoreContext;
@@ -39,12 +39,10 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
 
     public static final String NAME = "query";
 
-    public static final QueryRescorerBuilder PROTOTYPE = new QueryRescorerBuilder(new MatchAllQueryBuilder());
-
     public static final float DEFAULT_RESCORE_QUERYWEIGHT = 1.0f;
     public static final float DEFAULT_QUERYWEIGHT = 1.0f;
     public static final QueryRescoreMode DEFAULT_SCORE_MODE = QueryRescoreMode.Total;
-    private final QueryBuilder<?> queryBuilder;
+    private final QueryBuilder queryBuilder;
     private float rescoreQueryWeight = DEFAULT_RESCORE_QUERYWEIGHT;
     private float queryWeight = DEFAULT_QUERYWEIGHT;
     private QueryRescoreMode scoreMode = DEFAULT_SCORE_MODE;
@@ -59,7 +57,7 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
     static {
         QUERY_RESCORE_PARSER.declareObject(InnerBuilder::setQueryBuilder, (p, c) -> {
             try {
-                return c.parseInnerQueryBuilder();
+                return c.parseInnerQueryBuilder().orElse(QueryBuilders.matchAllQuery());
             } catch (IOException e) {
                 throw new ParsingException(p.getTokenLocation(), "Could not parse inner query", e);
             }
@@ -73,14 +71,36 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
      * Creates a new {@link QueryRescorerBuilder} instance
      * @param builder the query builder to build the rescore query from
      */
-    public QueryRescorerBuilder(QueryBuilder<?> builder) {
+    public QueryRescorerBuilder(QueryBuilder builder) {
+        if (builder == null) {
+            throw new IllegalArgumentException("rescore_query cannot be null");
+        }
         this.queryBuilder = builder;
+    }
+
+    /**
+     * Read from a stream.
+     */
+    public QueryRescorerBuilder(StreamInput in) throws IOException {
+        super(in);
+        queryBuilder = in.readNamedWriteable(QueryBuilder.class);
+        scoreMode = QueryRescoreMode.readFromStream(in);
+        rescoreQueryWeight = in.readFloat();
+        queryWeight = in.readFloat();
+    }
+
+    @Override
+    public void doWriteTo(StreamOutput out) throws IOException {
+        out.writeNamedWriteable(queryBuilder);
+        scoreMode.writeTo(out);
+        out.writeFloat(rescoreQueryWeight);
+        out.writeFloat(queryWeight);
     }
 
     /**
      * @return the query used for this rescore query
      */
-    public QueryBuilder<?> getRescoreQuery() {
+    public QueryBuilder getRescoreQuery() {
         return this.queryBuilder;
     }
 
@@ -140,9 +160,9 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
         builder.endObject();
     }
 
-    public QueryRescorerBuilder fromXContent(QueryParseContext parseContext) throws IOException {
-            InnerBuilder innerBuilder = QUERY_RESCORE_PARSER.parse(parseContext.parser(), new InnerBuilder(), parseContext);
-            return innerBuilder.build();
+    public static QueryRescorerBuilder fromXContent(QueryParseContext parseContext) throws IOException {
+        InnerBuilder innerBuilder = QUERY_RESCORE_PARSER.parse(parseContext.parser(), new InnerBuilder(), parseContext);
+        return innerBuilder.build();
     }
 
     @Override
@@ -182,23 +202,6 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
     }
 
     @Override
-    public QueryRescorerBuilder doReadFrom(StreamInput in) throws IOException {
-        QueryRescorerBuilder rescorer = new QueryRescorerBuilder(in.readQuery());
-        rescorer.setScoreMode(QueryRescoreMode.PROTOTYPE.readFrom(in));
-        rescorer.setRescoreQueryWeight(in.readFloat());
-        rescorer.setQueryWeight(in.readFloat());
-        return rescorer;
-    }
-
-    @Override
-    public void doWriteTo(StreamOutput out) throws IOException {
-        out.writeQuery(queryBuilder);
-        scoreMode.writeTo(out);
-        out.writeFloat(rescoreQueryWeight);
-        out.writeFloat(queryWeight);
-    }
-
-    @Override
     public String getWriteableName() {
         return NAME;
     }
@@ -208,14 +211,14 @@ public class QueryRescorerBuilder extends RescoreBuilder<QueryRescorerBuilder> {
      * for the constructor of {@link QueryRescorerBuilder}, but {@link ObjectParser} only
      * allows filling properties of an already constructed value.
      */
-    private class InnerBuilder {
+    private static class InnerBuilder {
 
-        private QueryBuilder<?> queryBuilder;
+        private QueryBuilder queryBuilder;
         private float rescoreQueryWeight = DEFAULT_RESCORE_QUERYWEIGHT;
         private float queryWeight = DEFAULT_QUERYWEIGHT;
         private QueryRescoreMode scoreMode = DEFAULT_SCORE_MODE;
 
-        void setQueryBuilder(QueryBuilder<?> builder) {
+        void setQueryBuilder(QueryBuilder builder) {
             this.queryBuilder = builder;
         }
 

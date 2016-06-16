@@ -24,12 +24,13 @@ import com.microsoft.azure.storage.StorageException;
 import org.elasticsearch.cloud.azure.blobstore.AzureBlobStore;
 import org.elasticsearch.cloud.azure.storage.AzureStorageService.Storage;
 import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.cluster.metadata.SnapshotId;
+import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
@@ -67,12 +68,14 @@ public class AzureRepository extends BlobStoreRepository {
     public final static String TYPE = "azure";
 
     public static final class Repository {
-        public static final Setting<String> ACCOUNT_SETTING = Setting.simpleString("account", false, Setting.Scope.CLUSTER);
-        public static final Setting<String> CONTAINER_SETTING = new Setting<>("container", "elasticsearch-snapshots", Function.identity(), false, Setting.Scope.CLUSTER);
-        public static final Setting<String> BASE_PATH_SETTING = Setting.simpleString("base_path", false, Setting.Scope.CLUSTER);
-        public static final Setting<String> LOCATION_MODE_SETTING = Setting.simpleString("location_mode", false, Setting.Scope.CLUSTER);
-        public static final Setting<ByteSizeValue> CHUNK_SIZE_SETTING = Setting.byteSizeSetting("chunk_size", MAX_CHUNK_SIZE, false, Setting.Scope.CLUSTER);
-        public static final Setting<Boolean> COMPRESS_SETTING = Setting.boolSetting("compress", false, false, Setting.Scope.CLUSTER);
+        public static final Setting<String> ACCOUNT_SETTING = Setting.simpleString("account", Property.NodeScope);
+        public static final Setting<String> CONTAINER_SETTING =
+            new Setting<>("container", "elasticsearch-snapshots", Function.identity(), Property.NodeScope);
+        public static final Setting<String> BASE_PATH_SETTING = Setting.simpleString("base_path", Property.NodeScope);
+        public static final Setting<String> LOCATION_MODE_SETTING = Setting.simpleString("location_mode", Property.NodeScope);
+        public static final Setting<ByteSizeValue> CHUNK_SIZE_SETTING =
+            Setting.byteSizeSetting("chunk_size", MAX_CHUNK_SIZE, Property.NodeScope);
+        public static final Setting<Boolean> COMPRESS_SETTING = Setting.boolSetting("compress", false, Property.NodeScope);
     }
 
     private final AzureBlobStore blobStore;
@@ -113,7 +116,7 @@ public class AzureRepository extends BlobStoreRepository {
             // Remove starting / if any
             basePath = Strings.trimLeadingCharacter(basePath, '/');
             BlobPath path = new BlobPath();
-            for(String elem : Strings.splitStringToArray(basePath, '/')) {
+            for(String elem : basePath.split("/")) {
                 path = path.add(elem);
             }
             this.basePath = path;
@@ -163,7 +166,7 @@ public class AzureRepository extends BlobStoreRepository {
             super.initializeSnapshot(snapshotId, indices, metaData);
         } catch (StorageException | URISyntaxException e) {
             logger.warn("can not initialize container [{}]: [{}]", blobStore.container(), e.getMessage());
-            throw new SnapshotCreationException(snapshotId, e);
+            throw new SnapshotCreationException(repositoryName, snapshotId, e);
         }
     }
 

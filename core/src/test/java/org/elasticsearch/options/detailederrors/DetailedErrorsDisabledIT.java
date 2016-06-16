@@ -36,12 +36,12 @@ import static org.hamcrest.Matchers.is;
 /**
  * Tests that when disabling detailed errors, a request with the error_trace parameter returns a HTTP 400
  */
-@ClusterScope(scope = Scope.TEST, numDataNodes = 1)
+@ClusterScope(scope = Scope.TEST, supportsDedicatedMasters = false, numDataNodes = 1)
 public class DetailedErrorsDisabledIT extends ESIntegTestCase {
     // Build our cluster settings
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
-        return Settings.settingsBuilder()
+        return Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
                 .put(NetworkModule.HTTP_ENABLED.getKey(), true)
                 .put(HttpTransportSettings.SETTING_HTTP_DETAILED_ERRORS_ENABLED.getKey(), false)

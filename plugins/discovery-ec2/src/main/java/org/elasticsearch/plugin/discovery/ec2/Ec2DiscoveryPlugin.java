@@ -32,18 +32,22 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.discovery.DiscoveryModule;
 import org.elasticsearch.discovery.ec2.AwsEc2UnicastHostsProvider;
-import org.elasticsearch.discovery.ec2.Ec2Discovery;
+import org.elasticsearch.discovery.zen.ZenDiscovery;
 import org.elasticsearch.plugins.Plugin;
 
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
 /**
  *
  */
 public class Ec2DiscoveryPlugin extends Plugin {
+
+    public static final String EC2 = "ec2";
 
     // ClientConfiguration clinit has some classloader problems
     // TODO: fix that
@@ -98,58 +102,42 @@ public class Ec2DiscoveryPlugin extends Plugin {
     }
 
     public void onModule(DiscoveryModule discoveryModule) {
-        if (Ec2Module.isEc2DiscoveryActive(settings, logger)) {
-            discoveryModule.addDiscoveryType("ec2", Ec2Discovery.class);
-            discoveryModule.addUnicastHostProvider(AwsEc2UnicastHostsProvider.class);
-        }
+        discoveryModule.addDiscoveryType(EC2, ZenDiscovery.class);
+        discoveryModule.addUnicastHostProvider(EC2, AwsEc2UnicastHostsProvider.class);
     }
 
-    public void onModule(SettingsModule settingsModule) {
+    @Override
+    public List<Setting<?>> getSettings() {
+        return Arrays.asList(
         // Register global cloud aws settings: cloud.aws (might have been registered in ec2 plugin)
-        registerSettingIfMissing(settingsModule, AwsEc2Service.KEY_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.SECRET_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.PROTOCOL_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.PROXY_HOST_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.PROXY_PORT_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.PROXY_USERNAME_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.PROXY_PASSWORD_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.SIGNER_SETTING);
-        registerSettingIfMissing(settingsModule, AwsEc2Service.REGION_SETTING);
-
+        AwsEc2Service.KEY_SETTING,
+        AwsEc2Service.SECRET_SETTING,
+        AwsEc2Service.PROTOCOL_SETTING,
+        AwsEc2Service.PROXY_HOST_SETTING,
+        AwsEc2Service.PROXY_PORT_SETTING,
+        AwsEc2Service.PROXY_USERNAME_SETTING,
+        AwsEc2Service.PROXY_PASSWORD_SETTING,
+        AwsEc2Service.SIGNER_SETTING,
+        AwsEc2Service.REGION_SETTING,
         // Register EC2 specific settings: cloud.aws.ec2
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.KEY_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.SECRET_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.PROTOCOL_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.PROXY_HOST_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.PROXY_PORT_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.PROXY_USERNAME_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.PROXY_PASSWORD_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.SIGNER_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.REGION_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.CLOUD_EC2.ENDPOINT_SETTING);
-
+        AwsEc2Service.CLOUD_EC2.KEY_SETTING,
+        AwsEc2Service.CLOUD_EC2.SECRET_SETTING,
+        AwsEc2Service.CLOUD_EC2.PROTOCOL_SETTING,
+        AwsEc2Service.CLOUD_EC2.PROXY_HOST_SETTING,
+        AwsEc2Service.CLOUD_EC2.PROXY_PORT_SETTING,
+        AwsEc2Service.CLOUD_EC2.PROXY_USERNAME_SETTING,
+        AwsEc2Service.CLOUD_EC2.PROXY_PASSWORD_SETTING,
+        AwsEc2Service.CLOUD_EC2.SIGNER_SETTING,
+        AwsEc2Service.CLOUD_EC2.REGION_SETTING,
+        AwsEc2Service.CLOUD_EC2.ENDPOINT_SETTING,
         // Register EC2 discovery settings: discovery.ec2
-        settingsModule.registerSetting(AwsEc2Service.DISCOVERY_EC2.HOST_TYPE_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.DISCOVERY_EC2.ANY_GROUP_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.DISCOVERY_EC2.GROUPS_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.DISCOVERY_EC2.AVAILABILITY_ZONES_SETTING);
-        settingsModule.registerSetting(AwsEc2Service.DISCOVERY_EC2.NODE_CACHE_TIME_SETTING);
-
-        // Filter global settings
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.KEY_SETTING.getKey());
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.SECRET_SETTING.getKey());
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.PROXY_PASSWORD_SETTING.getKey());
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.CLOUD_EC2.KEY_SETTING.getKey());
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.CLOUD_EC2.SECRET_SETTING.getKey());
-        settingsModule.registerSettingsFilterIfMissing(AwsEc2Service.CLOUD_EC2.PROXY_PASSWORD_SETTING.getKey());
-    }
-
-    /**
-     * We manage potential duplicates between s3 and ec2 plugins (cloud.aws.xxx)
-     */
-    private void registerSettingIfMissing(SettingsModule settingsModule, Setting<?> setting) {
-        if (settingsModule.exists(setting) == false) {
-            settingsModule.registerSetting(setting);
-        }
+        AwsEc2Service.DISCOVERY_EC2.HOST_TYPE_SETTING,
+        AwsEc2Service.DISCOVERY_EC2.ANY_GROUP_SETTING,
+        AwsEc2Service.DISCOVERY_EC2.GROUPS_SETTING,
+        AwsEc2Service.DISCOVERY_EC2.AVAILABILITY_ZONES_SETTING,
+        AwsEc2Service.DISCOVERY_EC2.NODE_CACHE_TIME_SETTING,
+        AwsEc2Service.DISCOVERY_EC2.TAG_SETTING,
+        // Register cloud node settings: cloud.node
+        AwsEc2Service.AUTO_ATTRIBUTE_SETTING);
     }
 }

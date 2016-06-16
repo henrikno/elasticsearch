@@ -20,6 +20,7 @@
 package org.elasticsearch.rest;
 
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.path.PathTrie;
@@ -112,30 +113,14 @@ public class RestController extends AbstractLifecycleComponent<RestController> {
     }
 
     /**
-     * Registers a rest handler to be execute when the provided method and path match the request.
+     * Registers a rest handler to be executed when the provided method and path match the request.
      */
     public void registerHandler(RestRequest.Method method, String path, RestHandler handler) {
-        switch (method) {
-            case GET:
-                getHandlers.insert(path, handler);
-                break;
-            case DELETE:
-                deleteHandlers.insert(path, handler);
-                break;
-            case POST:
-                postHandlers.insert(path, handler);
-                break;
-            case PUT:
-                putHandlers.insert(path, handler);
-                break;
-            case OPTIONS:
-                optionsHandlers.insert(path, handler);
-                break;
-            case HEAD:
-                headHandlers.insert(path, handler);
-                break;
-            default:
-                throw new IllegalArgumentException("Can't handle [" + method + "] for path [" + path + "]");
+        PathTrie<RestHandler> handlers = getHandlersForMethod(method);
+        if (handlers != null) {
+            handlers.insert(path, handler);
+        } else {
+            throw new IllegalArgumentException("Can't handle [" + method + "] for path [" + path + "]");
         }
     }
 
@@ -158,11 +143,20 @@ public class RestController extends AbstractLifecycleComponent<RestController> {
         return new ControllerFilterChain(executionFilter);
     }
 
-    public void dispatchRequest(final RestRequest request, final RestChannel channel, ThreadContext threadContext) {
+    /**
+     * @param request The current request. Must not be null.
+     * @return true iff the circuit breaker limit must be enforced for processing this request.
+     */
+    public boolean canTripCircuitBreaker(RestRequest request) {
+        RestHandler handler = getHandler(request);
+        return (handler != null) ? handler.canTripCircuitBreaker() : true;
+    }
+
+    public void dispatchRequest(final RestRequest request, final RestChannel channel, ThreadContext threadContext) throws Exception {
         if (!checkRequestParameters(request, channel)) {
             return;
         }
-        try (ThreadContext.StoredContext t = threadContext.stashContext()){
+        try (ThreadContext.StoredContext t = threadContext.stashContext()) {
             for (String key : relevantHeaders) {
                 String httpHeader = request.header(key);
                 if (httpHeader != null) {
@@ -170,19 +164,19 @@ public class RestController extends AbstractLifecycleComponent<RestController> {
                 }
             }
             if (filters.length == 0) {
-                try {
-                    executeHandler(request, channel);
-                } catch (Throwable e) {
-                    try {
-                        channel.sendResponse(new BytesRestResponse(channel, e));
-                    } catch (Throwable e1) {
-                        logger.error("failed to send failure response for uri [" + request.uri() + "]", e1);
-                    }
-                }
+                executeHandler(request, channel);
             } else {
                 ControllerFilterChain filterChain = new ControllerFilterChain(handlerFilter);
                 filterChain.continueProcessing(request, channel);
             }
+        }
+    }
+
+    public void sendErrorResponse(RestRequest request, RestChannel channel, Throwable e) {
+        try {
+            channel.sendResponse(new BytesRestResponse(channel, e));
+        } catch (Throwable e1) {
+            logger.error("failed to send failure response for uri [{}]", e1, request.uri());
         }
     }
 
@@ -215,28 +209,37 @@ public class RestController extends AbstractLifecycleComponent<RestController> {
         } else {
             if (request.method() == RestRequest.Method.OPTIONS) {
                 // when we have OPTIONS request, simply send OK by default (with the Access Control Origin header which gets automatically added)
-                channel.sendResponse(new BytesRestResponse(OK));
+                channel.sendResponse(new BytesRestResponse(OK, BytesRestResponse.TEXT_CONTENT_TYPE, BytesArray.EMPTY));
             } else {
-                channel.sendResponse(new BytesRestResponse(BAD_REQUEST, "No handler found for uri [" + request.uri() + "] and method [" + request.method() + "]"));
+                final String msg = "No handler found for uri [" + request.uri() + "] and method [" + request.method() + "]";
+                channel.sendResponse(new BytesRestResponse(BAD_REQUEST, msg));
             }
         }
     }
 
     private RestHandler getHandler(RestRequest request) {
         String path = getPath(request);
-        RestRequest.Method method = request.method();
+        PathTrie<RestHandler> handlers = getHandlersForMethod(request.method());
+        if (handlers != null) {
+            return handlers.retrieve(path, request.params());
+        } else {
+            return null;
+        }
+    }
+
+    private PathTrie<RestHandler> getHandlersForMethod(RestRequest.Method method) {
         if (method == RestRequest.Method.GET) {
-            return getHandlers.retrieve(path, request.params());
+            return getHandlers;
         } else if (method == RestRequest.Method.POST) {
-            return postHandlers.retrieve(path, request.params());
+            return postHandlers;
         } else if (method == RestRequest.Method.PUT) {
-            return putHandlers.retrieve(path, request.params());
+            return putHandlers;
         } else if (method == RestRequest.Method.DELETE) {
-            return deleteHandlers.retrieve(path, request.params());
+            return deleteHandlers;
         } else if (method == RestRequest.Method.HEAD) {
-            return headHandlers.retrieve(path, request.params());
+            return headHandlers;
         } else if (method == RestRequest.Method.OPTIONS) {
-            return optionsHandlers.retrieve(path, request.params());
+            return optionsHandlers;
         } else {
             return null;
         }
@@ -275,7 +278,7 @@ public class RestController extends AbstractLifecycleComponent<RestController> {
                 try {
                     channel.sendResponse(new BytesRestResponse(channel, e));
                 } catch (IOException e1) {
-                    logger.error("Failed to send failure response for uri [" + request.uri() + "]", e1);
+                    logger.error("Failed to send failure response for uri [{}]", e1, request.uri());
                 }
             }
         }

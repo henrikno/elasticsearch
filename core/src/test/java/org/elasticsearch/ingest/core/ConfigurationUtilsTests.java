@@ -20,9 +20,13 @@
 package org.elasticsearch.ingest.core;
 
 import org.elasticsearch.ElasticsearchParseException;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.ingest.ProcessorsRegistry;
 import org.elasticsearch.ingest.TestTemplateService;
+import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.test.ClusterServiceUtils;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.threadpool.TestThreadPool;
 import org.junit.Before;
 
 import java.util.ArrayList;
@@ -34,7 +38,6 @@ import java.util.Map;
 
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.sameInstance;
-import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 
 
@@ -45,6 +48,8 @@ public class ConfigurationUtilsTests extends ESTestCase {
     public void setConfig() {
         config = new HashMap<>();
         config.put("foo", "bar");
+        config.put("boolVal", true);
+        config.put("null", null);
         config.put("arr", Arrays.asList("1", "2", "3"));
         List<Integer> list = new ArrayList<>();
         list.add(2);
@@ -68,6 +73,24 @@ public class ConfigurationUtilsTests extends ESTestCase {
         }
     }
 
+    public void testReadBooleanProperty() {
+        Boolean val = ConfigurationUtils.readBooleanProperty(null, null, config, "boolVal", false);
+        assertThat(val, equalTo(true));
+    }
+
+    public void testReadNullBooleanProperty() {
+        Boolean val = ConfigurationUtils.readBooleanProperty(null, null, config, "null", false);
+        assertThat(val, equalTo(false));
+    }
+
+    public void testReadBooleanPropertyInvalidType() {
+        try {
+            ConfigurationUtils.readBooleanProperty(null, null, config, "arr", true);
+        } catch (ElasticsearchParseException e) {
+            assertThat(e.getMessage(), equalTo("[arr] property isn't a boolean, but of type [java.util.Arrays$ArrayList]"));
+        }
+    }
+
     // TODO(talevy): Issue with generics. This test should fail, "int" is of type List<Integer>
     public void testOptional_InvalidType() {
         List<String> val = ConfigurationUtils.readList(null, null, config, "int");
@@ -77,8 +100,8 @@ public class ConfigurationUtilsTests extends ESTestCase {
     public void testReadProcessors() throws Exception {
         Processor processor = mock(Processor.class);
         ProcessorsRegistry.Builder builder = new ProcessorsRegistry.Builder();
-        builder.registerProcessor("test_processor", (templateService, registry) -> config -> processor);
-        ProcessorsRegistry registry = builder.build(TestTemplateService.instance());
+        builder.registerProcessor("test_processor", (registry) -> config -> processor);
+        ProcessorsRegistry registry = builder.build(mock(ScriptService.class), mock(ClusterService.class));
 
 
         List<Map<String, Map<String, Object>>> config = new ArrayList<>();

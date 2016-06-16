@@ -20,18 +20,18 @@
 package org.elasticsearch.search.aggregations;
 
 import org.elasticsearch.Version;
-import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.inject.Injector;
 import org.elasticsearch.common.inject.ModulesBuilder;
-import org.elasticsearch.common.inject.multibindings.Multibinder;
 import org.elasticsearch.common.inject.util.Providers;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.common.xcontent.XContentFactory;
@@ -40,41 +40,32 @@ import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.EnvironmentModule;
 import org.elasticsearch.index.Index;
-import org.elasticsearch.index.query.AbstractQueryTestCase;
+import org.elasticsearch.test.AbstractQueryTestCase;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.indices.IndicesModule;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.indices.query.IndicesQueriesRegistry;
-import org.elasticsearch.script.MockScriptEngine;
-import org.elasticsearch.script.ScriptContext;
-import org.elasticsearch.script.ScriptContextRegistry;
-import org.elasticsearch.script.ScriptEngineRegistry;
-import org.elasticsearch.script.ScriptEngineService;
 import org.elasticsearch.script.ScriptModule;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.script.ScriptSettings;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.IndexSettingsModule;
 import org.elasticsearch.test.InternalSettingsPlugin;
 import org.elasticsearch.test.VersionUtils;
-import org.elasticsearch.test.cluster.TestClusterService;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.threadpool.ThreadPoolModule;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
+import static org.elasticsearch.test.ClusterServiceUtils.setState;
 import static org.hamcrest.Matchers.containsString;
 
 public class AggregatorParsingTests extends ESTestCase {
@@ -103,50 +94,23 @@ public class AggregatorParsingTests extends ESTestCase {
         // it's rather unlikely to get the current actually.
         Version version = randomBoolean() ? Version.CURRENT
                 : VersionUtils.randomVersionBetween(random(), Version.V_2_0_0_beta1, Version.CURRENT);
-        Settings settings = Settings.settingsBuilder().put("node.name", AbstractQueryTestCase.class.toString())
+        Settings settings = Settings.builder().put("node.name", AbstractQueryTestCase.class.toString())
                 .put(Environment.PATH_HOME_SETTING.getKey(), createTempDir())
                 .put(ScriptService.SCRIPT_AUTO_RELOAD_ENABLED_SETTING.getKey(), false).build();
 
         namedWriteableRegistry = new NamedWriteableRegistry();
         index = new Index(randomAsciiOfLengthBetween(1, 10), "_na_");
-        Settings indexSettings = Settings.settingsBuilder().put(IndexMetaData.SETTING_VERSION_CREATED, version).build();
-        final TestClusterService clusterService = new TestClusterService();
-        clusterService.setState(new ClusterState.Builder(clusterService.state()).metaData(new MetaData.Builder()
+        Settings indexSettings = Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, version).build();
+        final ThreadPool threadPool = new ThreadPool(settings);
+        final ClusterService clusterService = createClusterService(threadPool);
+        setState(clusterService, new ClusterState.Builder(clusterService.state()).metaData(new MetaData.Builder()
                 .put(new IndexMetaData.Builder(index.getName()).settings(indexSettings).numberOfShards(1).numberOfReplicas(0))));
-        SettingsModule settingsModule = new SettingsModule(settings);
-        settingsModule.registerSetting(InternalSettingsPlugin.VERSION_CREATED);
-        ScriptModule scriptModule = new ScriptModule() {
-            @Override
-            protected void configure() {
-                Settings settings = Settings.builder().put(Environment.PATH_HOME_SETTING.getKey(), createTempDir())
-                        // no file watching, so we don't need a
-                        // ResourceWatcherService
-                        .put(ScriptService.SCRIPT_AUTO_RELOAD_ENABLED_SETTING.getKey(), false).build();
-                MockScriptEngine mockScriptEngine = new MockScriptEngine();
-                Multibinder<ScriptEngineService> multibinder = Multibinder.newSetBinder(binder(), ScriptEngineService.class);
-                multibinder.addBinding().toInstance(mockScriptEngine);
-                Set<ScriptEngineService> engines = new HashSet<>();
-                engines.add(mockScriptEngine);
-                List<ScriptContext.Plugin> customContexts = new ArrayList<>();
-                ScriptEngineRegistry scriptEngineRegistry = new ScriptEngineRegistry(Collections
-                        .singletonList(new ScriptEngineRegistry.ScriptEngineRegistration(MockScriptEngine.class, MockScriptEngine.TYPES)));
-                bind(ScriptEngineRegistry.class).toInstance(scriptEngineRegistry);
-                ScriptContextRegistry scriptContextRegistry = new ScriptContextRegistry(customContexts);
-                bind(ScriptContextRegistry.class).toInstance(scriptContextRegistry);
-                ScriptSettings scriptSettings = new ScriptSettings(scriptEngineRegistry, scriptContextRegistry);
-                bind(ScriptSettings.class).toInstance(scriptSettings);
-                try {
-                    ScriptService scriptService = new ScriptService(settings, new Environment(settings), engines, null,
-                            scriptEngineRegistry, scriptContextRegistry, scriptSettings);
-                    bind(ScriptService.class).toInstance(scriptService);
-                } catch (IOException e) {
-                    throw new IllegalStateException("error while binding ScriptService", e);
-                }
-            }
-        };
-        scriptModule.prepareSettings(settingsModule);
-        injector = new ModulesBuilder().add(new EnvironmentModule(new Environment(settings)), settingsModule,
-                new ThreadPoolModule(new ThreadPool(settings)), scriptModule, new IndicesModule() {
+        ScriptModule scriptModule = newTestScriptModule();
+        List<Setting<?>> scriptSettings = scriptModule.getSettings();
+        scriptSettings.add(InternalSettingsPlugin.VERSION_CREATED);
+        SettingsModule settingsModule = new SettingsModule(settings, scriptSettings, Collections.emptyList());
+        injector = new ModulesBuilder().add(new EnvironmentModule(new Environment(settings), threadPool), settingsModule
+            , scriptModule, new IndicesModule() {
 
                     @Override
                     protected void configure() {
@@ -155,11 +119,6 @@ public class AggregatorParsingTests extends ESTestCase {
                 }, new SearchModule(settings, namedWriteableRegistry) {
                     @Override
                     protected void configureSearch() {
-                        // Skip me
-                    }
-
-                    @Override
-                    protected void configureSuggesters() {
                         // Skip me
                     }
                 }, new IndexSettingsModule(index, settings),
@@ -186,6 +145,7 @@ public class AggregatorParsingTests extends ESTestCase {
 
     @AfterClass
     public static void afterClass() throws Exception {
+        injector.getInstance(ClusterService.class).close();
         terminate(injector.getInstance(ThreadPool.class));
         injector = null;
         index = null;
@@ -196,27 +156,25 @@ public class AggregatorParsingTests extends ESTestCase {
 
     public void testTwoTypes() throws Exception {
         String source = JsonXContent.contentBuilder()
-            .startObject()
-              .startObject("in_stock")
-                  .startObject("filter")
-                      .startObject("range")
-                          .startObject("stock")
-                              .field("gt", 0)
-                          .endObject()
-                      .endObject()
-                  .endObject()
-                  .startObject("terms")
-                      .field("field", "stock")
-                  .endObject()
-              .endObject()
-            .endObject().string();
+                .startObject()
+                .startObject("in_stock")
+                .startObject("filter")
+                .startObject("range")
+                .startObject("stock")
+                .field("gt", 0)
+                .endObject()
+                .endObject()
+                .endObject()
+                .startObject("terms")
+                .field("field", "stock")
+                .endObject()
+                .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (ParsingException e) {
             assertThat(e.toString(), containsString("Found two aggregation type definitions in [in_stock]: [filter] and [terms]"));
@@ -225,34 +183,33 @@ public class AggregatorParsingTests extends ESTestCase {
 
     public void testTwoAggs() throws Exception {
         String source = JsonXContent.contentBuilder()
-          .startObject()
-              .startObject("by_date")
-                  .startObject("date_histogram")
-                      .field("field", "timestamp")
-                      .field("interval", "month")
-                  .endObject()
-                  .startObject("aggs")
-                      .startObject("tag_count")
-                          .startObject("cardinality")
-                              .field("field", "tag")
-                          .endObject()
-                      .endObject()
-                  .endObject()
-                  .startObject("aggs") // 2nd "aggs": illegal
-                      .startObject("tag_count2")
-                          .startObject("cardinality")
-                              .field("field", "tag")
-                          .endObject()
-                      .endObject()
-                  .endObject()
-          .endObject().string();
+                .startObject()
+                    .startObject("by_date")
+                        .startObject("date_histogram")
+                            .field("field", "timestamp")
+                            .field("interval", "month")
+                        .endObject()
+                        .startObject("aggs")
+                            .startObject("tag_count")
+                                .startObject("cardinality")
+                                    .field("field", "tag")
+                                .endObject()
+                            .endObject()
+                        .endObject()
+                        .startObject("aggs") // 2nd "aggs": illegal
+                            .startObject("tag_count2")
+                                .startObject("cardinality")
+                                    .field("field", "tag")
+                                .endObject()
+                            .endObject()
+                        .endObject()
+                    .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (ParsingException e) {
             assertThat(e.toString(), containsString("Found two sub aggregation definitions under [by_date]"));
@@ -262,7 +219,7 @@ public class AggregatorParsingTests extends ESTestCase {
     public void testInvalidAggregationName() throws Exception {
         Matcher matcher = Pattern.compile("[^\\[\\]>]+").matcher("");
         String name;
-        Random rand = getRandom();
+        Random rand = random();
         int len = randomIntBetween(1, 5);
         char[] word = new char[len];
         while (true) {
@@ -276,23 +233,22 @@ public class AggregatorParsingTests extends ESTestCase {
         }
 
         String source = JsonXContent.contentBuilder()
-          .startObject()
-              .startObject(name)
-                  .startObject("filter")
-                      .startObject("range")
-                          .startObject("stock")
-                              .field("gt", 0)
-                          .endObject()
-                      .endObject()
-                  .endObject()
-          .endObject().string();
+                .startObject()
+                    .startObject(name)
+                        .startObject("filter")
+                            .startObject("range")
+                                .startObject("stock")
+                                    .field("gt", 0)
+                                .endObject()
+                            .endObject()
+                        .endObject()
+                    .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (ParsingException e) {
             assertThat(e.toString(), containsString("Invalid aggregation name [" + name + "]"));
@@ -302,25 +258,23 @@ public class AggregatorParsingTests extends ESTestCase {
     public void testSameAggregationName() throws Exception {
         final String name = randomAsciiOfLengthBetween(1, 10);
         String source = JsonXContent.contentBuilder()
-          .startObject()
-              .startObject(name)
-                  .startObject("terms")
-                      .field("field", "a")
-                  .endObject()
-              .endObject()
-              .startObject(name)
-                  .startObject("terms")
-                      .field("field", "b")
-                  .endObject()
-              .endObject()
-          .endObject().string();
+                .startObject()
+                .startObject(name)
+                .startObject("terms")
+                .field("field", "a")
+                .endObject()
+                .endObject()
+                .startObject(name)
+                .startObject("terms")
+                .field("field", "b")
+                .endObject()
+                .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (IllegalArgumentException e) {
             assertThat(e.toString(), containsString("Two sibling aggregations cannot have the same name: [" + name + "]"));
@@ -329,28 +283,27 @@ public class AggregatorParsingTests extends ESTestCase {
 
     public void testMissingName() throws Exception {
         String source = JsonXContent.contentBuilder()
-          .startObject()
-              .startObject("by_date")
-                  .startObject("date_histogram")
-                      .field("field", "timestamp")
-                      .field("interval", "month")
-                  .endObject()
-                  .startObject("aggs")
-                      // the aggregation name is missing
-                      //.startObject("tag_count")
-                          .startObject("cardinality")
-                              .field("field", "tag")
-                          .endObject()
-                      //.endObject()
-                  .endObject()
-          .endObject().string();
+                .startObject()
+                    .startObject("by_date")
+                        .startObject("date_histogram")
+                            .field("field", "timestamp")
+                            .field("interval", "month")
+                        .endObject()
+                        .startObject("aggs")
+                            // the aggregation name is missing
+                            //.startObject("tag_count")
+                            .startObject("cardinality")
+                                .field("field", "tag")
+                            .endObject()
+                            //.endObject()
+                        .endObject()
+                    .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (ParsingException e) {
             // All Good
@@ -359,28 +312,27 @@ public class AggregatorParsingTests extends ESTestCase {
 
     public void testMissingType() throws Exception {
         String source = JsonXContent.contentBuilder()
-          .startObject()
-              .startObject("by_date")
-                  .startObject("date_histogram")
-                      .field("field", "timestamp")
-                      .field("interval", "month")
-                  .endObject()
-                  .startObject("aggs")
-                      .startObject("tag_count")
-                          // the aggregation type is missing
-                          //.startObject("cardinality")
-                              .field("field", "tag")
-                          //.endObject()
-                      .endObject()
-                  .endObject()
-          .endObject().string();
+                .startObject()
+                    .startObject("by_date")
+                        .startObject("date_histogram")
+                            .field("field", "timestamp")
+                            .field("interval", "month")
+                        .endObject()
+                        .startObject("aggs")
+                            .startObject("tag_count")
+                                // the aggregation type is missing
+                                //.startObject("cardinality")
+                                .field("field", "tag")
+                                //.endObject()
+                            .endObject()
+                        .endObject()
+                    .endObject()
+                .endObject().string();
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (ParsingException e) {
             // All Good

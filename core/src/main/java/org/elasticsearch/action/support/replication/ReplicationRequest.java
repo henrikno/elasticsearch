@@ -19,10 +19,12 @@
 
 package org.elasticsearch.action.support.replication;
 
+import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.WriteConsistencyLevel;
-import org.elasticsearch.action.support.ChildTaskActionRequest;
+import org.elasticsearch.action.admin.indices.refresh.TransportShardRefreshAction;
+import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -30,6 +32,7 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskId;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
@@ -37,9 +40,11 @@ import java.util.concurrent.TimeUnit;
 import static org.elasticsearch.action.ValidateActions.addValidationError;
 
 /**
- *
+ * Requests that are run on a particular replica, first on the primary and then on the replicas like {@link IndexRequest} or
+ * {@link TransportShardRefreshAction}.
  */
-public abstract class ReplicationRequest<Request extends ReplicationRequest<Request>> extends ChildTaskActionRequest<Request> implements IndicesRequest {
+public abstract class ReplicationRequest<Request extends ReplicationRequest<Request>> extends ActionRequest<Request>
+        implements IndicesRequest {
 
     public static final TimeValue DEFAULT_TIMEOUT = new TimeValue(1, TimeUnit.MINUTES);
 
@@ -49,6 +54,8 @@ public abstract class ReplicationRequest<Request extends ReplicationRequest<Requ
      * and at request creation time for shard-level bulk, refresh and flush requests.
      */
     protected ShardId shardId;
+
+    long primaryTerm;
 
     protected TimeValue timeout = DEFAULT_TIMEOUT;
     protected String index;
@@ -60,7 +67,6 @@ public abstract class ReplicationRequest<Request extends ReplicationRequest<Requ
     public ReplicationRequest() {
 
     }
-
 
     /**
      * Creates a new request with resolved shard id
@@ -147,6 +153,16 @@ public abstract class ReplicationRequest<Request extends ReplicationRequest<Requ
         return routedBasedOnClusterVersion;
     }
 
+    /** returns the primary term active at the time the operation was performed on the primary shard */
+    public long primaryTerm() {
+        return primaryTerm;
+    }
+
+    /** marks the primary term in which the operation was performed */
+    public void primaryTerm(long term) {
+        primaryTerm = term;
+    }
+
     @Override
     public ActionRequestValidationException validate() {
         ActionRequestValidationException validationException = null;
@@ -165,9 +181,10 @@ public abstract class ReplicationRequest<Request extends ReplicationRequest<Requ
             shardId = null;
         }
         consistencyLevel = WriteConsistencyLevel.fromId(in.readByte());
-        timeout = TimeValue.readTimeValue(in);
+        timeout = new TimeValue(in);
         index = in.readString();
         routedBasedOnClusterVersion = in.readVLong();
+        primaryTerm = in.readVLong();
     }
 
     @Override
@@ -183,11 +200,12 @@ public abstract class ReplicationRequest<Request extends ReplicationRequest<Requ
         timeout.writeTo(out);
         out.writeString(index);
         out.writeVLong(routedBasedOnClusterVersion);
+        out.writeVLong(primaryTerm);
     }
 
     @Override
-    public Task createTask(long id, String type, String action, String parentTaskNode, long parentTaskId) {
-        return new ReplicationTask(id, type, action, getDescription(), parentTaskNode, parentTaskId);
+    public Task createTask(long id, String type, String action, TaskId parentTaskId) {
+        return new ReplicationTask(id, type, action, getDescription(), parentTaskId);
     }
 
     /**

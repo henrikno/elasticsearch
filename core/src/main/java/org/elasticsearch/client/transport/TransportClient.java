@@ -26,7 +26,6 @@ import org.elasticsearch.action.ActionModule;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestBuilder;
 import org.elasticsearch.action.ActionResponse;
-import org.elasticsearch.cache.recycler.PageCacheRecycler;
 import org.elasticsearch.client.support.AbstractClient;
 import org.elasticsearch.client.transport.support.TransportProxyClient;
 import org.elasticsearch.cluster.ClusterNameModule;
@@ -38,11 +37,12 @@ import org.elasticsearch.common.inject.ModulesBuilder;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.network.NetworkService;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.settings.SettingsFilter;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.common.transport.TransportAddress;
-import org.elasticsearch.indices.breaker.CircuitBreakerModule;
+import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import org.elasticsearch.monitor.MonitorService;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.internal.InternalSettingsPreparer;
@@ -50,16 +50,14 @@ import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.plugins.PluginsModule;
 import org.elasticsearch.plugins.PluginsService;
 import org.elasticsearch.search.SearchModule;
+import org.elasticsearch.threadpool.ExecutorBuilder;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.threadpool.ThreadPoolModule;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.transport.netty.NettyTransport;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-
-import static org.elasticsearch.common.settings.Settings.settingsBuilder;
 
 /**
  * The transport client allows to create a client that is not part of the cluster, but simply connects to one
@@ -109,11 +107,10 @@ public class TransportClient extends AbstractClient {
         }
 
         private PluginsService newPluginService(final Settings settings) {
-            final Settings.Builder settingsBuilder = settingsBuilder()
+            final Settings.Builder settingsBuilder = Settings.builder()
                     .put(NettyTransport.PING_SCHEDULE.getKey(), "5s") // enable by default the transport schedule ping interval
                     .put(InternalSettingsPreparer.prepareSettings(settings))
                     .put(NetworkService.NETWORK_SERVER.getKey(), false)
-                    .put(Node.NODE_CLIENT_SETTING.getKey(), true)
                     .put(CLIENT_TYPE_SETTING_S.getKey(), CLIENT_TYPE);
             return new PluginsService(settingsBuilder.build(), null, null, pluginClasses);
         }
@@ -139,10 +136,9 @@ public class TransportClient extends AbstractClient {
                     modules.add(pluginModule);
                 }
                 modules.add(new PluginsModule(pluginsService));
-                modules.add(new SettingsModule(settings));
                 modules.add(new NetworkModule(networkService, settings, true, namedWriteableRegistry));
                 modules.add(new ClusterNameModule(settings));
-                modules.add(new ThreadPoolModule(threadPool));
+                modules.add(b -> b.bind(ThreadPool.class).toInstance(threadPool));
                 modules.add(new SearchModule(settings, namedWriteableRegistry) {
                     @Override
                     protected void configure() {
@@ -150,12 +146,26 @@ public class TransportClient extends AbstractClient {
                     }
                 });
                 modules.add(new ActionModule(false, true));
-                modules.add(new CircuitBreakerModule(settings));
 
                 pluginsService.processModules(modules);
+                final List<Setting<?>> additionalSettings = new ArrayList<>();
+                final List<String> additionalSettingsFilter = new ArrayList<>();
+                additionalSettings.addAll(pluginsService.getPluginSettings());
+                additionalSettingsFilter.addAll(pluginsService.getPluginSettingsFilter());
+                for (final ExecutorBuilder<?> builder : threadPool.builders()) {
+                    additionalSettings.addAll(builder.getRegisteredSettings());
+                }
+                SettingsModule settingsModule = new SettingsModule(settings, additionalSettings, additionalSettingsFilter);
+                CircuitBreakerService circuitBreakerService = Node.createCircuitBreakerService(settingsModule.getSettings(),
+                    settingsModule.getClusterSettings());
+                modules.add(settingsModule);
+                modules.add((b -> b.bind(CircuitBreakerService.class).toInstance(circuitBreakerService)));
 
                 Injector injector = modules.createInjector();
-                injector.getInstance(TransportService.class).start();
+                final TransportService transportService = injector.getInstance(TransportService.class);
+                transportService.start();
+                transportService.acceptIncomingRequests();
+
                 TransportClient transportClient = new TransportClient(injector);
                 success = true;
                 return transportClient;
@@ -274,7 +284,7 @@ public class TransportClient extends AbstractClient {
             // ignore
         }
 
-        injector.getInstance(PageCacheRecycler.class).close();
+        injector.getInstance(BigArrays.class).close();
     }
 
     @Override

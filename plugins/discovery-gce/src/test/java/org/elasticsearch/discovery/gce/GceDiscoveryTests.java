@@ -21,11 +21,13 @@ package org.elasticsearch.discovery.gce;
 
 import org.elasticsearch.Version;
 import org.elasticsearch.cloud.gce.GceComputeService;
+import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.network.NetworkService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.transport.MockTransportService;
+import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -71,7 +73,7 @@ public class GceDiscoveryTests extends ESTestCase {
 
     @BeforeClass
     public static void createThreadPool() {
-        threadPool = new ThreadPool(GceDiscoveryTests.class.getName());
+        threadPool = new TestThreadPool(GceDiscoveryTests.class.getName());
     }
 
     @AfterClass
@@ -93,7 +95,7 @@ public class GceDiscoveryTests extends ESTestCase {
 
     @Before
     public void createTransportService() {
-        transportService = MockTransportService.local(Settings.EMPTY, Version.CURRENT, threadPool);
+        transportService = MockTransportService.local(Settings.EMPTY, Version.CURRENT, threadPool, ClusterName.DEFAULT);
     }
 
     @Before
@@ -131,7 +133,7 @@ public class GceDiscoveryTests extends ESTestCase {
         Settings nodeSettings = Settings.builder()
                 .put(GceComputeService.PROJECT_SETTING.getKey(), projectName)
                 .put(GceComputeService.ZONE_SETTING.getKey(), "europe-west1-b")
-                .putArray(GceDiscovery.TAGS_SETTING.getKey(), "elasticsearch")
+                .putArray(GceUnicastHostsProvider.TAGS_SETTING.getKey(), "elasticsearch")
                 .build();
         mock = new GceComputeServiceMock(nodeSettings, networkService);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(mock, nodeSettings);
@@ -143,7 +145,7 @@ public class GceDiscoveryTests extends ESTestCase {
         Settings nodeSettings = Settings.builder()
                 .put(GceComputeService.PROJECT_SETTING.getKey(), projectName)
                 .put(GceComputeService.ZONE_SETTING.getKey(), "europe-west1-b")
-                .putArray(GceDiscovery.TAGS_SETTING.getKey(), "elasticsearch", "dev")
+                .putArray(GceUnicastHostsProvider.TAGS_SETTING.getKey(), "elasticsearch", "dev")
                 .build();
         mock = new GceComputeServiceMock(nodeSettings, networkService);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(mock, nodeSettings);
@@ -165,7 +167,7 @@ public class GceDiscoveryTests extends ESTestCase {
         Settings nodeSettings = Settings.builder()
                 .put(GceComputeService.PROJECT_SETTING.getKey(), projectName)
                 .put(GceComputeService.ZONE_SETTING.getKey(), "europe-west1-b")
-                .putArray(GceDiscovery.TAGS_SETTING.getKey(), "elasticsearch")
+                .putArray(GceUnicastHostsProvider.TAGS_SETTING.getKey(), "elasticsearch")
                 .build();
         mock = new GceComputeServiceMock(nodeSettings, networkService);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(mock, nodeSettings);
@@ -176,7 +178,7 @@ public class GceDiscoveryTests extends ESTestCase {
         Settings nodeSettings = Settings.builder()
                 .put(GceComputeService.PROJECT_SETTING.getKey(), projectName)
                 .put(GceComputeService.ZONE_SETTING.getKey(), "europe-west1-b")
-                .putArray(GceDiscovery.TAGS_SETTING.getKey(), "elasticsearch", "dev")
+                .putArray(GceUnicastHostsProvider.TAGS_SETTING.getKey(), "elasticsearch", "dev")
                 .build();
         mock = new GceComputeServiceMock(nodeSettings, networkService);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(mock, nodeSettings);

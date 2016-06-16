@@ -23,6 +23,7 @@ import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequestBuilder;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
@@ -46,7 +47,6 @@ import java.util.concurrent.ExecutionException;
 
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_REPLICAS;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_SHARDS;
-import static org.elasticsearch.common.settings.Settings.settingsBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
 import static org.elasticsearch.index.query.QueryBuilders.disMaxQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
@@ -74,7 +74,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
     @Before
     public void init() throws Exception {
-        CreateIndexRequestBuilder builder = prepareCreate("test").setSettings(settingsBuilder()
+        CreateIndexRequestBuilder builder = prepareCreate("test").setSettings(Settings.builder()
                 .put(indexSettings())
                 .put(SETTING_NUMBER_OF_SHARDS, 1)
                 .put(SETTING_NUMBER_OF_REPLICAS, 0)
@@ -130,7 +130,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
         fill(lastNames, "Captain", between(3, 7));
         fillRandom(lastNames, between(30, 40));
         for (int i = 0; i < numDocs; i++) {
-            String first = RandomPicks.randomFrom(getRandom(), firstNames);
+            String first = RandomPicks.randomFrom(random(), firstNames);
             String last = randomPickExcept(lastNames, first);
             builders.add(client().prepareIndex("test", "test", "" + i).setSource(
                     "full_name", first + " " + last,
@@ -156,12 +156,12 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 .endObject()
                 .startObject("first_name")
                 .field("type", "text")
-                .field("omit_norms", "true")
+                .field("norms", false)
                 .field("copy_to", "first_name_phrase")
                 .endObject()
                 .startObject("last_name")
                 .field("type", "text")
-                .field("omit_norms", "true")
+                .field("norms", false)
                 .field("copy_to", "last_name_phrase")
                 .endObject()
                 .endObject()
@@ -180,7 +180,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
             // the doc id is the tie-breaker
         }
         assertThat(topNIds, empty());
-        assertThat(searchResponse.getHits().hits()[0].getScore(), equalTo(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero captain america", "full_name", "first_name", "last_name", "category")
@@ -245,11 +245,11 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
         // check if it's equivalent to a match query.
         int numIters = scaledRandomIntBetween(10, 100);
         for (int i = 0; i < numIters; i++) {
-            String field = RandomPicks.randomFrom(getRandom(), fields);
+            String field = RandomPicks.randomFrom(random(), fields);
             int numTerms = randomIntBetween(1, query.length);
             StringBuilder builder = new StringBuilder();
             for (int j = 0; j < numTerms; j++) {
-                builder.append(RandomPicks.randomFrom(getRandom(), query)).append(" ");
+                builder.append(RandomPicks.randomFrom(random(), query)).append(" ");
             }
             MultiMatchQueryBuilder multiMatchQueryBuilder = randomizeType(multiMatchQuery(builder.toString(), field));
             SearchResponse multiMatchResp = client().prepareSearch("test")
@@ -386,7 +386,6 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
             {
                 String minShouldMatch = randomBoolean() ? null : "" + between(0, 1);
-                Operator op = randomBoolean() ? Operator.AND : Operator.OR;
                 SearchResponse left = client().prepareSearch("test").setSize(numDocs)
                         .addSort(SortBuilders.scoreSort()).addSort(SortBuilders.fieldSort("_uid"))
                         .setQuery(randomizeType(multiMatchQuery("capta", "full_name", "first_name", "last_name", "category")
@@ -396,15 +395,14 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                         .addSort(SortBuilders.scoreSort()).addSort(SortBuilders.fieldSort("_uid"))
                         .setQuery(boolQuery().minimumShouldMatch(minShouldMatch)
                                 .should(matchPhrasePrefixQuery("full_name", "capta"))
-                                .should(matchPhrasePrefixQuery("first_name", "capta").operator(op))
-                                .should(matchPhrasePrefixQuery("last_name", "capta").operator(op))
-                                .should(matchPhrasePrefixQuery("category", "capta").operator(op))
+                                .should(matchPhrasePrefixQuery("first_name", "capta"))
+                                .should(matchPhrasePrefixQuery("last_name", "capta"))
+                                .should(matchPhrasePrefixQuery("category", "capta"))
                         ).get();
                 assertEquivalent("capta", left, right);
             }
             {
                 String minShouldMatch = randomBoolean() ? null : "" + between(0, 1);
-                Operator op = randomBoolean() ? Operator.AND : Operator.OR;
                 SearchResponse left;
                 if (randomBoolean()) {
                     left = client().prepareSearch("test").setSize(numDocs)
@@ -421,9 +419,9 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                         .addSort(SortBuilders.scoreSort()).addSort(SortBuilders.fieldSort("_uid"))
                         .setQuery(boolQuery().minimumShouldMatch(minShouldMatch)
                                 .should(matchPhraseQuery("full_name", "captain america"))
-                                .should(matchPhraseQuery("first_name", "captain america").operator(op))
-                                .should(matchPhraseQuery("last_name", "captain america").operator(op))
-                                .should(matchPhraseQuery("category", "captain america").operator(op))
+                                .should(matchPhraseQuery("first_name", "captain america"))
+                                .should(matchPhraseQuery("last_name", "captain america"))
+                                .should(matchPhraseQuery("category", "captain america"))
                         ).get();
                 assertEquivalent("captain america", left, right);
             }
@@ -567,7 +565,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
         // test if boosts work
         searchResponse = client().prepareSearch("test")
-                .setQuery(randomizeType(multiMatchQuery("the ultimate", "full_name", "first_name", "last_name", "category").field("last_name", 2)
+                .setQuery(randomizeType(multiMatchQuery("the ultimate", "full_name", "first_name", "last_name", "category").field("last_name", 10)
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)
                         .operator(Operator.AND))).get();
         assertFirstHit(searchResponse, hasId("ultimate1"));   // has ultimate in the last_name and that is boosted
@@ -654,14 +652,14 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
     public List<String> fillRandom(List<String> list, int times) {
         for (int i = 0; i < times; i++) {
-            list.add(randomRealisticUnicodeOfCodepointLengthBetween(1, 5));
+            list.add(randomAsciiOfLengthBetween(1, 5));
         }
         return list;
     }
 
     public <T> T randomPickExcept(List<T> fromList, T butNot) {
         while (true) {
-            T t = RandomPicks.randomFrom(getRandom(), fromList);
+            T t = RandomPicks.randomFrom(random(), fromList);
             if (t.equals(butNot)) {
                 continue;
             }

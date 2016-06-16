@@ -19,8 +19,7 @@
 
 package org.elasticsearch.search;
 
-import org.elasticsearch.cache.recycler.PageCacheRecycler;
-import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -29,10 +28,9 @@ import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.search.aggregations.AggregatorParsers;
-import org.elasticsearch.search.dfs.DfsPhase;
 import org.elasticsearch.search.fetch.FetchPhase;
 import org.elasticsearch.search.internal.SearchContext;
-import org.elasticsearch.search.query.QueryPhase;
+import org.elasticsearch.search.suggest.Suggesters;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.HashMap;
@@ -40,7 +38,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class MockSearchService extends SearchService {
-
     public static class TestPlugin extends Plugin {
         @Override
         public String name() {
@@ -58,33 +55,49 @@ public class MockSearchService extends SearchService {
     private static final Map<SearchContext, Throwable> ACTIVE_SEARCH_CONTEXTS = new ConcurrentHashMap<>();
 
     /** Throw an {@link AssertionError} if there are still in-flight contexts. */
-    public static void assertNoInFLightContext() {
+    public static void assertNoInFlightContext() {
         final Map<SearchContext, Throwable> copy = new HashMap<>(ACTIVE_SEARCH_CONTEXTS);
         if (copy.isEmpty() == false) {
-            throw new AssertionError("There are still " + copy.size() + " in-flight contexts", copy.values().iterator().next());
+            throw new AssertionError(
+                    "There are still [" + copy.size()
+                            + "] in-flight contexts. The first one's creation site is listed as the cause of this exception.",
+                    copy.values().iterator().next());
         }
+    }
+
+    /**
+     * Add an active search context to the list of tracked contexts. Package private for testing.
+     */
+    static void addActiveContext(SearchContext context) {
+        ACTIVE_SEARCH_CONTEXTS.put(context, new RuntimeException(context.toString()));
+    }
+
+    /**
+     * Clear an active search context from the list of tracked contexts. Package private for testing.
+     */
+    static void removeActiveContext(SearchContext context) {
+        ACTIVE_SEARCH_CONTEXTS.remove(context);
     }
 
     @Inject
     public MockSearchService(Settings settings, ClusterSettings clusterSettings, ClusterService clusterService,
-            IndicesService indicesService, ThreadPool threadPool, ScriptService scriptService, PageCacheRecycler pageCacheRecycler,
-            BigArrays bigArrays, DfsPhase dfsPhase, QueryPhase queryPhase, FetchPhase fetchPhase,
-            AggregatorParsers aggParsers) {
-        super(settings, clusterSettings, clusterService, indicesService, threadPool, scriptService, pageCacheRecycler, bigArrays, dfsPhase,
-                queryPhase, fetchPhase, aggParsers);
+            IndicesService indicesService, ThreadPool threadPool, ScriptService scriptService,
+            BigArrays bigArrays, FetchPhase fetchPhase, AggregatorParsers aggParsers, Suggesters suggesters) {
+        super(settings, clusterSettings, clusterService, indicesService, threadPool, scriptService, bigArrays,
+                fetchPhase, aggParsers, suggesters);
     }
 
     @Override
     protected void putContext(SearchContext context) {
         super.putContext(context);
-        ACTIVE_SEARCH_CONTEXTS.put(context, new RuntimeException());
+        addActiveContext(context);
     }
 
     @Override
     protected SearchContext removeContext(long id) {
         final SearchContext removed = super.removeContext(id);
         if (removed != null) {
-            ACTIVE_SEARCH_CONTEXTS.remove(removed);
+            removeActiveContext(removed);
         }
         return removed;
     }

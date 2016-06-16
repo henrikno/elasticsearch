@@ -20,63 +20,57 @@
 package org.elasticsearch.search.aggregations;
 
 import org.elasticsearch.Version;
-import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.inject.Injector;
 import org.elasticsearch.common.inject.ModulesBuilder;
-import org.elasticsearch.common.inject.multibindings.Multibinder;
 import org.elasticsearch.common.inject.util.Providers;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
+import org.elasticsearch.common.xcontent.ToXContent;
+import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.EnvironmentModule;
 import org.elasticsearch.index.Index;
-import org.elasticsearch.index.query.AbstractQueryTestCase;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.indices.IndicesModule;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.indices.query.IndicesQueriesRegistry;
-import org.elasticsearch.script.MockScriptEngine;
-import org.elasticsearch.script.ScriptContext;
-import org.elasticsearch.script.ScriptContextRegistry;
-import org.elasticsearch.script.ScriptEngineRegistry;
-import org.elasticsearch.script.ScriptEngineService;
 import org.elasticsearch.script.ScriptModule;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.script.ScriptSettings;
 import org.elasticsearch.search.SearchModule;
-import org.elasticsearch.search.aggregations.pipeline.PipelineAggregatorBuilder;
+import org.elasticsearch.search.aggregations.pipeline.AbstractPipelineAggregatorBuilder;
+import org.elasticsearch.test.AbstractQueryTestCase;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.IndexSettingsModule;
 import org.elasticsearch.test.InternalSettingsPlugin;
 import org.elasticsearch.test.VersionUtils;
-import org.elasticsearch.test.cluster.TestClusterService;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.threadpool.ThreadPoolModule;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
+import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
+import static org.elasticsearch.test.ClusterServiceUtils.setState;
 import static org.hamcrest.Matchers.equalTo;
 
-public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggregatorBuilder> extends ESTestCase {
+public abstract class BasePipelineAggregationTestCase<AF extends AbstractPipelineAggregatorBuilder<AF>> extends ESTestCase {
 
     protected static final String STRING_FIELD_NAME = "mapped_string";
     protected static final String INT_FIELD_NAME = "mapped_int";
@@ -84,8 +78,8 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
     protected static final String BOOLEAN_FIELD_NAME = "mapped_boolean";
     protected static final String DATE_FIELD_NAME = "mapped_date";
     protected static final String OBJECT_FIELD_NAME = "mapped_object";
-    protected static final String[] mappedFieldNames = new String[] { STRING_FIELD_NAME, INT_FIELD_NAME,
-            DOUBLE_FIELD_NAME, BOOLEAN_FIELD_NAME, DATE_FIELD_NAME, OBJECT_FIELD_NAME };
+    protected static final String[] mappedFieldNames = new String[]{STRING_FIELD_NAME, INT_FIELD_NAME,
+            DOUBLE_FIELD_NAME, BOOLEAN_FIELD_NAME, DATE_FIELD_NAME, OBJECT_FIELD_NAME};
 
     private static Injector injector;
     private static Index index;
@@ -98,9 +92,9 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
 
     private static NamedWriteableRegistry namedWriteableRegistry;
 
-    private static AggregatorParsers aggParsers;
-    private static ParseFieldMatcher parseFieldMatcher;
-    private static IndicesQueriesRegistry queriesRegistry;
+    protected static AggregatorParsers aggParsers;
+    protected static ParseFieldMatcher parseFieldMatcher;
+    protected static IndicesQueriesRegistry queriesRegistry;
 
     protected abstract AF createTestAggregatorFactory();
 
@@ -109,57 +103,29 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
      */
     @BeforeClass
     public static void init() throws IOException {
-     // we have to prefer CURRENT since with the range of versions we support it's rather unlikely to get the current actually.
+        // we have to prefer CURRENT since with the range of versions we support it's rather unlikely to get the current actually.
         Version version = randomBoolean() ? Version.CURRENT
                 : VersionUtils.randomVersionBetween(random(), Version.V_2_0_0_beta1, Version.CURRENT);
-        Settings settings = Settings.settingsBuilder()
+        Settings settings = Settings.builder()
                 .put("node.name", AbstractQueryTestCase.class.toString())
                 .put(Environment.PATH_HOME_SETTING.getKey(), createTempDir())
                 .put(ScriptService.SCRIPT_AUTO_RELOAD_ENABLED_SETTING.getKey(), false)
                 .build();
 
-        namedWriteableRegistry =  new NamedWriteableRegistry();
+        namedWriteableRegistry = new NamedWriteableRegistry();
         index = new Index(randomAsciiOfLengthBetween(1, 10), "_na_");
-        Settings indexSettings = Settings.settingsBuilder().put(IndexMetaData.SETTING_VERSION_CREATED, version).build();
-        final TestClusterService clusterService = new TestClusterService();
-        clusterService.setState(new ClusterState.Builder(clusterService.state()).metaData(new MetaData.Builder()
+        Settings indexSettings = Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, version).build();
+        final ThreadPool threadPool = new ThreadPool(settings);
+        final ClusterService clusterService = createClusterService(threadPool);
+        setState(clusterService, new ClusterState.Builder(clusterService.state()).metaData(new MetaData.Builder()
                 .put(new IndexMetaData.Builder(index.getName()).settings(indexSettings).numberOfShards(1).numberOfReplicas(0))));
-        SettingsModule settingsModule = new SettingsModule(settings);
-        settingsModule.registerSetting(InternalSettingsPlugin.VERSION_CREATED);
-        ScriptModule scriptModule = new ScriptModule() {
-            @Override
-            protected void configure() {
-                Settings settings = Settings.builder().put(Environment.PATH_HOME_SETTING.getKey(), createTempDir())
-                        // no file watching, so we don't need a
-                        // ResourceWatcherService
-                        .put(ScriptService.SCRIPT_AUTO_RELOAD_ENABLED_SETTING.getKey(), false).build();
-                MockScriptEngine mockScriptEngine = new MockScriptEngine();
-                Multibinder<ScriptEngineService> multibinder = Multibinder.newSetBinder(binder(), ScriptEngineService.class);
-                multibinder.addBinding().toInstance(mockScriptEngine);
-                Set<ScriptEngineService> engines = new HashSet<>();
-                engines.add(mockScriptEngine);
-                List<ScriptContext.Plugin> customContexts = new ArrayList<>();
-                ScriptEngineRegistry scriptEngineRegistry = new ScriptEngineRegistry(Collections
-                        .singletonList(new ScriptEngineRegistry.ScriptEngineRegistration(MockScriptEngine.class, MockScriptEngine.TYPES)));
-                bind(ScriptEngineRegistry.class).toInstance(scriptEngineRegistry);
-                ScriptContextRegistry scriptContextRegistry = new ScriptContextRegistry(customContexts);
-                bind(ScriptContextRegistry.class).toInstance(scriptContextRegistry);
-                ScriptSettings scriptSettings = new ScriptSettings(scriptEngineRegistry, scriptContextRegistry);
-                bind(ScriptSettings.class).toInstance(scriptSettings);
-                try {
-                    ScriptService scriptService = new ScriptService(settings, new Environment(settings), engines, null,
-                            scriptEngineRegistry, scriptContextRegistry, scriptSettings);
-                    bind(ScriptService.class).toInstance(scriptService);
-                } catch (IOException e) {
-                    throw new IllegalStateException("error while binding ScriptService", e);
-                }
-            }
-        };
-        scriptModule.prepareSettings(settingsModule);
+        ScriptModule scriptModule = newTestScriptModule();
+        List<Setting<?>> scriptSettings = scriptModule.getSettings();
+        scriptSettings.add(InternalSettingsPlugin.VERSION_CREATED);
+        SettingsModule settingsModule = new SettingsModule(settings, scriptSettings, Collections.emptyList());
         injector = new ModulesBuilder().add(
-                new EnvironmentModule(new Environment(settings)),
+                new EnvironmentModule(new Environment(settings),threadPool),
                 settingsModule,
-                new ThreadPoolModule(new ThreadPool(settings)),
                 scriptModule,
                 new IndicesModule() {
 
@@ -170,10 +136,6 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
                 }, new SearchModule(settings, namedWriteableRegistry) {
                     @Override
                     protected void configureSearch() {
-                        // Skip me
-                    }
-                    @Override
-                    protected void configureSuggesters() {
                         // Skip me
                     }
                 },
@@ -200,6 +162,7 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
 
     @AfterClass
     public static void afterClass() throws Exception {
+        injector.getInstance(ClusterService.class).close();
         terminate(injector.getInstance(ThreadPool.class));
         injector = null;
         index = null;
@@ -217,21 +180,26 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
     public void testFromXContent() throws IOException {
         AF testAgg = createTestAggregatorFactory();
         AggregatorFactories.Builder factoriesBuilder = AggregatorFactories.builder().skipResolveOrder().addPipelineAggregator(testAgg);
+        logger.info("Content string: {}", factoriesBuilder);
+        XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+        if (randomBoolean()) {
+            builder.prettyPrint();
+        }
+        factoriesBuilder.toXContent(builder, ToXContent.EMPTY_PARAMS);
+        XContentBuilder shuffled = shuffleXContent(builder);
+        XContentParser parser = XContentFactory.xContent(shuffled.bytes()).createParser(shuffled.bytes());
+        QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
         String contentString = factoriesBuilder.toString();
-        System.out.println(contentString);
-        XContentParser parser = XContentFactory.xContent(contentString).createParser(contentString);
-        QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-        parseContext.reset(parser);
-        parseContext.parseFieldMatcher(parseFieldMatcher);
+        logger.info("Content string: {}", contentString);
         assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
         assertSame(XContentParser.Token.FIELD_NAME, parser.nextToken());
-        assertEquals(testAgg.name(), parser.currentName());
+        assertEquals(testAgg.getName(), parser.currentName());
         assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
         assertSame(XContentParser.Token.FIELD_NAME, parser.nextToken());
         assertEquals(testAgg.type(), parser.currentName());
         assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-        PipelineAggregatorBuilder newAgg = aggParsers.pipelineAggregator(testAgg.getWriteableName()).parse(testAgg.name(), parser,
-                parseContext);
+        PipelineAggregatorBuilder newAgg = aggParsers.pipelineParser(testAgg.getWriteableName(), ParseFieldMatcher.STRICT)
+                .parse(testAgg.getName(), parseContext);
         assertSame(XContentParser.Token.END_OBJECT, parser.currentToken());
         assertSame(XContentParser.Token.END_OBJECT, parser.nextToken());
         assertSame(XContentParser.Token.END_OBJECT, parser.nextToken());
@@ -249,10 +217,9 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
     public void testSerialization() throws IOException {
         AF testAgg = createTestAggregatorFactory();
         try (BytesStreamOutput output = new BytesStreamOutput()) {
-            testAgg.writeTo(output);
+            output.writeNamedWriteable(testAgg);
             try (StreamInput in = new NamedWriteableAwareStreamInput(StreamInput.wrap(output.bytes()), namedWriteableRegistry)) {
-                PipelineAggregatorBuilder prototype = aggParsers.pipelineAggregator(testAgg.getWriteableName()).getFactoryPrototype();
-                PipelineAggregatorBuilder deserializedQuery = prototype.readFrom(in);
+                PipelineAggregatorBuilder deserializedQuery = in.readNamedWriteable(PipelineAggregatorBuilder.class);
                 assertEquals(deserializedQuery, testAgg);
                 assertEquals(deserializedQuery.hashCode(), testAgg.hashCode());
                 assertNotSame(deserializedQuery, testAgg);
@@ -290,11 +257,10 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
     // argument
     private AF copyAggregation(AF agg) throws IOException {
         try (BytesStreamOutput output = new BytesStreamOutput()) {
-            agg.writeTo(output);
+            output.writeNamedWriteable(agg);
             try (StreamInput in = new NamedWriteableAwareStreamInput(StreamInput.wrap(output.bytes()), namedWriteableRegistry)) {
-                PipelineAggregatorBuilder prototype = aggParsers.pipelineAggregator(agg.getWriteableName()).getFactoryPrototype();
                 @SuppressWarnings("unchecked")
-                AF secondAgg = (AF) prototype.readFrom(in);
+                AF secondAgg = (AF) in.readNamedWriteable(PipelineAggregatorBuilder.class);
                 return secondAgg;
             }
         }
@@ -310,7 +276,7 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
             }
         } else {
             if (randomBoolean()) {
-                types = new String[] { MetaData.ALL };
+                types = new String[]{MetaData.ALL};
             } else {
                 types = new String[0];
             }
@@ -321,13 +287,13 @@ public abstract class BasePipelineAggregationTestCase<AF extends PipelineAggrega
     public String randomNumericField() {
         int randomInt = randomInt(3);
         switch (randomInt) {
-        case 0:
-            return DATE_FIELD_NAME;
-        case 1:
-            return DOUBLE_FIELD_NAME;
-        case 2:
-        default:
-            return INT_FIELD_NAME;
+            case 0:
+                return DATE_FIELD_NAME;
+            case 1:
+                return DOUBLE_FIELD_NAME;
+            case 2:
+            default:
+                return INT_FIELD_NAME;
         }
     }
 }

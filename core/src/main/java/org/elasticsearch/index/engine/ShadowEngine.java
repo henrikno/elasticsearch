@@ -67,6 +67,9 @@ public class ShadowEngine extends Engine {
 
     public ShadowEngine(EngineConfig engineConfig)  {
         super(engineConfig);
+        if (engineConfig.getRefreshListeners() != null) {
+            throw new IllegalArgumentException("ShadowEngine doesn't support RefreshListeners");
+        }
         SearcherFactory searcherFactory = new EngineSearcherFactory(engineConfig);
         final long nonexistentRetryTime = engineConfig.getIndexSettings().getSettings()
                 .getAsTime(NONEXISTENT_INDEX_RETRY_WAIT, DEFAULT_NONEXISTENT_INDEX_RETRY_WAIT)
@@ -246,5 +249,10 @@ public class ShadowEngine extends Engine {
     @Override
     public void deactivateThrottling() {
         throw new UnsupportedOperationException("ShadowEngine has no IndexWriter");
+    }
+
+    @Override
+    public Engine recoverFromTranslog() throws IOException {
+        throw new UnsupportedOperationException("can't recover on a shadow engine");
     }
 }

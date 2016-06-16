@@ -64,8 +64,10 @@ cloud:
 
 `my_account1` is the default account which will be used by a repository unless you set an explicit one.
 
-You can set the timeout to use when making any single request. It can be defined globally, per account or both.
-Defaults to `5m`.
+You can set the client side timeout to use when making any single request. It can be defined globally, per account or both.
+It's not set by default which means that elasticsearch is using the
+http://azure.github.io/azure-storage-java/com/microsoft/azure/storage/RequestOptions.html#setTimeoutIntervalInMs(java.lang.Integer)[default value]
+set by the azure client (known as 5 minutes).
 
 [source,yaml]
 ----
@@ -127,7 +129,7 @@ The Azure repository supports following settings:
 
 Some examples, using scripts:
 
-[source,json]
+[source,js]
 ----
 # The simpliest one
 PUT _snapshot/my_backup1
@@ -165,7 +167,8 @@ PUT _snapshot/my_backup4
     }
 }
 ----
-// AUTOSENSE
+// CONSOLE
+// TEST[skip:we don't have azure setup while testing this]
 
 Example using Java:
 
@@ -205,4 +208,3 @@ be a valid DNS name, conforming to the following naming rules:
 permitted in container names.
 * All letters in a container name must be lowercase.
 * Container names must be from 3 through 63 characters long.
-

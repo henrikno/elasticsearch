@@ -21,6 +21,7 @@ package org.elasticsearch.mapper.attachments;
 
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.search.Query;
 import org.apache.tika.language.LanguageIdentifier;
 import org.apache.tika.metadata.Metadata;
 import org.elasticsearch.Version;
@@ -28,6 +29,7 @@ import org.elasticsearch.common.collect.Iterators;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.ESLoggerFactory;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
@@ -38,8 +40,11 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.mapper.core.DateFieldMapper;
-import org.elasticsearch.index.mapper.core.IntegerFieldMapper;
+import org.elasticsearch.index.mapper.core.NumberFieldMapper;
+import org.elasticsearch.index.mapper.core.NumberFieldMapper.NumberType;
 import org.elasticsearch.index.mapper.core.TextFieldMapper;
+import org.elasticsearch.index.query.QueryShardContext;
+import org.elasticsearch.index.query.QueryShardException;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -71,9 +76,12 @@ import static org.elasticsearch.index.mapper.core.TypeParsers.parseMultiField;
 public class AttachmentMapper extends FieldMapper {
 
     private static ESLogger logger = ESLoggerFactory.getLogger("mapper.attachment");
-    public static final Setting<Boolean> INDEX_ATTACHMENT_IGNORE_ERRORS_SETTING = Setting.boolSetting("index.mapping.attachment.ignore_errors", true, false, Setting.Scope.INDEX);
-    public static final Setting<Boolean> INDEX_ATTACHMENT_DETECT_LANGUAGE_SETTING = Setting.boolSetting("index.mapping.attachment.detect_language", false, false, Setting.Scope.INDEX);
-    public static final Setting<Integer> INDEX_ATTACHMENT_INDEXED_CHARS_SETTING = Setting.intSetting("index.mapping.attachment.indexed_chars", 100000, false, Setting.Scope.INDEX);
+    public static final Setting<Boolean> INDEX_ATTACHMENT_IGNORE_ERRORS_SETTING =
+        Setting.boolSetting("index.mapping.attachment.ignore_errors", true, Property.IndexScope);
+    public static final Setting<Boolean> INDEX_ATTACHMENT_DETECT_LANGUAGE_SETTING =
+        Setting.boolSetting("index.mapping.attachment.detect_language", false, Property.IndexScope);
+    public static final Setting<Integer> INDEX_ATTACHMENT_INDEXED_CHARS_SETTING =
+        Setting.intSetting("index.mapping.attachment.indexed_chars", 100000, Property.IndexScope);
 
     public static final String CONTENT_TYPE = "attachment";
 
@@ -115,8 +123,8 @@ public class AttachmentMapper extends FieldMapper {
         }
 
         @Override
-        public String value(Object value) {
-            return value == null?null:value.toString();
+        public Query termQuery(Object value, QueryShardContext context) {
+            throw new QueryShardException(context, "Attachment fields are not searchable: [" + name() + "]");
         }
     }
 
@@ -142,7 +150,7 @@ public class AttachmentMapper extends FieldMapper {
 
         private Mapper.Builder<?, ?> contentTypeBuilder = new TextFieldMapper.Builder(FieldNames.CONTENT_TYPE);
 
-        private Mapper.Builder<?, ?> contentLengthBuilder = new IntegerFieldMapper.Builder(FieldNames.CONTENT_LENGTH);
+        private Mapper.Builder<?, ?> contentLengthBuilder = new NumberFieldMapper.Builder(FieldNames.CONTENT_LENGTH, NumberType.INTEGER);
 
         private Mapper.Builder<?, ?> languageBuilder = new TextFieldMapper.Builder(FieldNames.LANGUAGE);
 
@@ -206,7 +214,6 @@ public class AttachmentMapper extends FieldMapper {
                 if (contentBuilder instanceof FieldMapper.Builder == false) {
                     throw new IllegalStateException("content field for attachment must be a field mapper");
                 }
-                ((FieldMapper.Builder<?, ?>)contentBuilder).indexName(name);
                 contentBuilder.name = name + "." + FieldNames.CONTENT;
                 contentMapper = (FieldMapper) contentBuilder.build(context);
                 context.path().add(name);
@@ -295,7 +302,7 @@ public class AttachmentMapper extends FieldMapper {
             if (typeNode != null) {
                 type = typeNode.toString();
             } else {
-                type = "string";
+                type = "text";
             }
             Mapper.TypeParser typeParser = parserContext.typeParser(type);
             Mapper.Builder<?, ?> mapperBuilder = typeParser.parse(propName, propNode, parserContext);
@@ -420,7 +427,6 @@ public class AttachmentMapper extends FieldMapper {
     }
 
     @Override
-    @SuppressWarnings("deprecation") // https://github.com/elastic/elasticsearch/issues/15843
     public Mapper parse(ParseContext context) throws IOException {
         byte[] content = null;
         String contentType = null;

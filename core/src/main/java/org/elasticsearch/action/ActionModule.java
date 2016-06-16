@@ -19,6 +19,8 @@
 
 package org.elasticsearch.action;
 
+import org.elasticsearch.action.admin.cluster.allocation.ClusterAllocationExplainAction;
+import org.elasticsearch.action.admin.cluster.allocation.TransportClusterAllocationExplainAction;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthAction;
 import org.elasticsearch.action.admin.cluster.health.TransportClusterHealthAction;
 import org.elasticsearch.action.admin.cluster.node.hotthreads.NodesHotThreadsAction;
@@ -30,6 +32,8 @@ import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsAction;
 import org.elasticsearch.action.admin.cluster.node.stats.TransportNodesStatsAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.TransportCancelTasksAction;
+import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskAction;
+import org.elasticsearch.action.admin.cluster.node.tasks.get.TransportGetTaskAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.TransportListTasksAction;
 import org.elasticsearch.action.admin.cluster.repositories.delete.DeleteRepositoryAction;
@@ -113,6 +117,8 @@ import org.elasticsearch.action.admin.indices.settings.put.TransportUpdateSettin
 import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsAction;
 import org.elasticsearch.action.admin.indices.shards.IndicesShardStoresAction;
 import org.elasticsearch.action.admin.indices.shards.TransportIndicesShardStoresAction;
+import org.elasticsearch.action.admin.indices.shrink.ShrinkAction;
+import org.elasticsearch.action.admin.indices.shrink.TransportShrinkAction;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsAction;
 import org.elasticsearch.action.admin.indices.stats.TransportIndicesStatsAction;
 import org.elasticsearch.action.admin.indices.template.delete.DeleteIndexTemplateAction;
@@ -137,7 +143,7 @@ import org.elasticsearch.action.delete.TransportDeleteAction;
 import org.elasticsearch.action.explain.ExplainAction;
 import org.elasticsearch.action.explain.TransportExplainAction;
 import org.elasticsearch.action.fieldstats.FieldStatsAction;
-import org.elasticsearch.action.fieldstats.TransportFieldStatsTransportAction;
+import org.elasticsearch.action.fieldstats.TransportFieldStatsAction;
 import org.elasticsearch.action.get.GetAction;
 import org.elasticsearch.action.get.MultiGetAction;
 import org.elasticsearch.action.get.TransportGetAction;
@@ -145,12 +151,12 @@ import org.elasticsearch.action.get.TransportMultiGetAction;
 import org.elasticsearch.action.get.TransportShardMultiGetAction;
 import org.elasticsearch.action.index.IndexAction;
 import org.elasticsearch.action.index.TransportIndexAction;
-import org.elasticsearch.action.indexedscripts.delete.DeleteIndexedScriptAction;
-import org.elasticsearch.action.indexedscripts.delete.TransportDeleteIndexedScriptAction;
-import org.elasticsearch.action.indexedscripts.get.GetIndexedScriptAction;
-import org.elasticsearch.action.indexedscripts.get.TransportGetIndexedScriptAction;
-import org.elasticsearch.action.indexedscripts.put.PutIndexedScriptAction;
-import org.elasticsearch.action.indexedscripts.put.TransportPutIndexedScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.DeleteStoredScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.TransportDeleteStoredScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.GetStoredScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.TransportGetStoredScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.PutStoredScriptAction;
+import org.elasticsearch.action.admin.cluster.storedscripts.TransportPutStoredScriptAction;
 import org.elasticsearch.action.ingest.IngestActionFilter;
 import org.elasticsearch.action.ingest.IngestProxyActionFilter;
 import org.elasticsearch.action.ingest.DeletePipelineAction;
@@ -161,11 +167,8 @@ import org.elasticsearch.action.ingest.PutPipelineAction;
 import org.elasticsearch.action.ingest.PutPipelineTransportAction;
 import org.elasticsearch.action.ingest.SimulatePipelineAction;
 import org.elasticsearch.action.ingest.SimulatePipelineTransportAction;
-import org.elasticsearch.action.percolate.MultiPercolateAction;
-import org.elasticsearch.action.percolate.PercolateAction;
-import org.elasticsearch.action.percolate.TransportMultiPercolateAction;
-import org.elasticsearch.action.percolate.TransportPercolateAction;
-import org.elasticsearch.action.percolate.TransportShardMultiPercolateAction;
+import org.elasticsearch.action.main.MainAction;
+import org.elasticsearch.action.main.TransportMainAction;
 import org.elasticsearch.action.search.ClearScrollAction;
 import org.elasticsearch.action.search.MultiSearchAction;
 import org.elasticsearch.action.search.SearchAction;
@@ -174,14 +177,6 @@ import org.elasticsearch.action.search.TransportClearScrollAction;
 import org.elasticsearch.action.search.TransportMultiSearchAction;
 import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.action.search.TransportSearchScrollAction;
-import org.elasticsearch.action.search.type.TransportSearchDfsQueryAndFetchAction;
-import org.elasticsearch.action.search.type.TransportSearchDfsQueryThenFetchAction;
-import org.elasticsearch.action.search.type.TransportSearchQueryAndFetchAction;
-import org.elasticsearch.action.search.type.TransportSearchQueryThenFetchAction;
-import org.elasticsearch.action.search.type.TransportSearchScrollQueryAndFetchAction;
-import org.elasticsearch.action.search.type.TransportSearchScrollQueryThenFetchAction;
-import org.elasticsearch.action.suggest.SuggestAction;
-import org.elasticsearch.action.suggest.TransportSuggestAction;
 import org.elasticsearch.action.support.ActionFilter;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.AutoCreateIndex;
@@ -266,12 +261,15 @@ public class ActionModule extends AbstractModule {
         bind(ActionFilters.class).asEagerSingleton();
         bind(AutoCreateIndex.class).asEagerSingleton();
         bind(DestructiveOperations.class).asEagerSingleton();
+        registerAction(MainAction.INSTANCE, TransportMainAction.class);
         registerAction(NodesInfoAction.INSTANCE, TransportNodesInfoAction.class);
         registerAction(NodesStatsAction.INSTANCE, TransportNodesStatsAction.class);
         registerAction(NodesHotThreadsAction.INSTANCE, TransportNodesHotThreadsAction.class);
         registerAction(ListTasksAction.INSTANCE, TransportListTasksAction.class);
+        registerAction(GetTaskAction.INSTANCE, TransportGetTaskAction.class);
         registerAction(CancelTasksAction.INSTANCE, TransportCancelTasksAction.class);
 
+        registerAction(ClusterAllocationExplainAction.INSTANCE, TransportClusterAllocationExplainAction.class);
         registerAction(ClusterStatsAction.INSTANCE, TransportClusterStatsAction.class);
         registerAction(ClusterStateAction.INSTANCE, TransportClusterStateAction.class);
         registerAction(ClusterHealthAction.INSTANCE, TransportClusterHealthAction.class);
@@ -293,6 +291,7 @@ public class ActionModule extends AbstractModule {
         registerAction(IndicesSegmentsAction.INSTANCE, TransportIndicesSegmentsAction.class);
         registerAction(IndicesShardStoresAction.INSTANCE, TransportIndicesShardStoresAction.class);
         registerAction(CreateIndexAction.INSTANCE, TransportCreateIndexAction.class);
+        registerAction(ShrinkAction.INSTANCE, TransportShrinkAction.class);
         registerAction(DeleteIndexAction.INSTANCE, TransportDeleteIndexAction.class);
         registerAction(GetIndexAction.INSTANCE, TransportGetIndexAction.class);
         registerAction(OpenIndexAction.INSTANCE, TransportOpenIndexAction.class);
@@ -327,36 +326,25 @@ public class ActionModule extends AbstractModule {
         registerAction(MultiTermVectorsAction.INSTANCE, TransportMultiTermVectorsAction.class,
                 TransportShardMultiTermsVectorAction.class);
         registerAction(DeleteAction.INSTANCE, TransportDeleteAction.class);
-        registerAction(SuggestAction.INSTANCE, TransportSuggestAction.class);
         registerAction(UpdateAction.INSTANCE, TransportUpdateAction.class);
         registerAction(MultiGetAction.INSTANCE, TransportMultiGetAction.class,
                 TransportShardMultiGetAction.class);
         registerAction(BulkAction.INSTANCE, TransportBulkAction.class,
                 TransportShardBulkAction.class);
-        registerAction(SearchAction.INSTANCE, TransportSearchAction.class,
-                TransportSearchDfsQueryThenFetchAction.class,
-                TransportSearchQueryThenFetchAction.class,
-                TransportSearchDfsQueryAndFetchAction.class,
-                TransportSearchQueryAndFetchAction.class
-        );
-        registerAction(SearchScrollAction.INSTANCE, TransportSearchScrollAction.class,
-                TransportSearchScrollQueryThenFetchAction.class,
-                TransportSearchScrollQueryAndFetchAction.class
-        );
+        registerAction(SearchAction.INSTANCE, TransportSearchAction.class);
+        registerAction(SearchScrollAction.INSTANCE, TransportSearchScrollAction.class);
         registerAction(MultiSearchAction.INSTANCE, TransportMultiSearchAction.class);
-        registerAction(PercolateAction.INSTANCE, TransportPercolateAction.class);
-        registerAction(MultiPercolateAction.INSTANCE, TransportMultiPercolateAction.class, TransportShardMultiPercolateAction.class);
         registerAction(ExplainAction.INSTANCE, TransportExplainAction.class);
         registerAction(ClearScrollAction.INSTANCE, TransportClearScrollAction.class);
         registerAction(RecoveryAction.INSTANCE, TransportRecoveryAction.class);
         registerAction(RenderSearchTemplateAction.INSTANCE, TransportRenderSearchTemplateAction.class);
 
         //Indexed scripts
-        registerAction(PutIndexedScriptAction.INSTANCE, TransportPutIndexedScriptAction.class);
-        registerAction(GetIndexedScriptAction.INSTANCE, TransportGetIndexedScriptAction.class);
-        registerAction(DeleteIndexedScriptAction.INSTANCE, TransportDeleteIndexedScriptAction.class);
+        registerAction(PutStoredScriptAction.INSTANCE, TransportPutStoredScriptAction.class);
+        registerAction(GetStoredScriptAction.INSTANCE, TransportGetStoredScriptAction.class);
+        registerAction(DeleteStoredScriptAction.INSTANCE, TransportDeleteStoredScriptAction.class);
 
-        registerAction(FieldStatsAction.INSTANCE, TransportFieldStatsTransportAction.class);
+        registerAction(FieldStatsAction.INSTANCE, TransportFieldStatsAction.class);
 
         registerAction(PutPipelineAction.INSTANCE, PutPipelineTransportAction.class);
         registerAction(GetPipelineAction.INSTANCE, GetPipelineTransportAction.class);

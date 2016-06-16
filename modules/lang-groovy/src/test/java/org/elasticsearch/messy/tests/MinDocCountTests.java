@@ -35,7 +35,7 @@ import org.elasticsearch.search.aggregations.bucket.AbstractTermsTestCase;
 import org.elasticsearch.search.aggregations.bucket.histogram.DateHistogramInterval;
 import org.elasticsearch.search.aggregations.bucket.histogram.Histogram;
 import org.elasticsearch.search.aggregations.bucket.terms.Terms;
-import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregatorBuilder;
+import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.terms.support.IncludeExclude;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.joda.time.DateTime;
@@ -56,6 +56,7 @@ import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.search.aggregations.AggregationBuilders.dateHistogram;
 import static org.elasticsearch.search.aggregations.AggregationBuilders.histogram;
 import static org.elasticsearch.search.aggregations.AggregationBuilders.terms;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAllSuccessful;
 
 
@@ -67,13 +68,14 @@ public class MinDocCountTests extends AbstractTermsTestCase {
         return Collections.singleton(GroovyPlugin.class);
     }
 
-    private static final QueryBuilder<?> QUERY = QueryBuilders.termQuery("match", true);
+    private static final QueryBuilder QUERY = QueryBuilders.termQuery("match", true);
 
     private static int cardinality;
 
     @Override
     public void setupSuiteScopeCluster() throws Exception {
-        createIndex("idx");
+        assertAcked(client().admin().indices().prepareCreate("idx")
+                .addMapping("type", "s", "type=keyword").get());
 
         cardinality = randomIntBetween(8, 30);
         final List<IndexRequestBuilder> indexRequests = new ArrayList<>();
@@ -82,7 +84,7 @@ public class MinDocCountTests extends AbstractTermsTestCase {
         for (int i = 0; i < cardinality; ++i) {
             String stringTerm;
             do {
-                stringTerm = RandomStrings.randomAsciiOfLength(getRandom(), 8);
+                stringTerm = RandomStrings.randomAsciiOfLength(random(), 8);
             } while (!stringTerms.add(stringTerm));
             long longTerm;
             do {
@@ -111,17 +113,17 @@ public class MinDocCountTests extends AbstractTermsTestCase {
     private enum Script {
         NO {
             @Override
-            TermsAggregatorBuilder apply(TermsAggregatorBuilder builder, String field) {
+            TermsAggregationBuilder apply(TermsAggregationBuilder builder, String field) {
                 return builder.field(field);
             }
         },
         YES {
             @Override
-            TermsAggregatorBuilder apply(TermsAggregatorBuilder builder, String field) {
+            TermsAggregationBuilder apply(TermsAggregationBuilder builder, String field) {
                 return builder.script(new org.elasticsearch.script.Script("doc['" + field + "'].values"));
             }
         };
-        abstract TermsAggregatorBuilder apply(TermsAggregatorBuilder builder, String field);
+        abstract TermsAggregationBuilder apply(TermsAggregationBuilder builder, String field);
     }
 
     // check that terms2 is a subset of terms1

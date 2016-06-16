@@ -29,15 +29,12 @@ import org.elasticsearch.action.ActionRequestBuilder;
 import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequestBuilder;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
-import org.elasticsearch.action.admin.cluster.node.info.NodesInfoResponse;
-import org.elasticsearch.action.admin.cluster.node.info.PluginsAndModules;
 import org.elasticsearch.action.admin.indices.alias.exists.AliasesExistResponse;
 import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequestBuilder;
 import org.elasticsearch.action.admin.indices.delete.DeleteIndexResponse;
 import org.elasticsearch.action.admin.indices.template.get.GetIndexTemplatesResponse;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.get.GetResponse;
-import org.elasticsearch.action.percolate.PercolateResponse;
 import org.elasticsearch.action.search.SearchPhaseExecutionException;
 import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
@@ -56,16 +53,17 @@ import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
-import org.elasticsearch.plugins.PluginInfo;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.suggest.Suggest;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.VersionUtils;
 import org.elasticsearch.test.rest.client.http.HttpResponse;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
-import org.junit.Assert;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
@@ -78,9 +76,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static org.apache.lucene.util.LuceneTestCase.random;
 import static org.elasticsearch.test.VersionUtils.randomVersion;
@@ -144,7 +139,7 @@ public class ElasticsearchAssertions {
     }
 
     /**
-     * Checks that all shard requests of a replicated brodcast request failed due to a cluster block
+     * Checks that all shard requests of a replicated broadcast request failed due to a cluster block
      *
      * @param replicatedBroadcastResponse the response that should only contain failed shard responses
      *
@@ -250,13 +245,6 @@ public class ElasticsearchAssertions {
         assertVersionSerializable(countResponse);
     }
 
-    public static void assertMatchCount(PercolateResponse percolateResponse, long expectedHitCount) {
-        if (percolateResponse.getCount() != expectedHitCount) {
-            fail("Count is " + percolateResponse.getCount() + " but " + expectedHitCount + " was expected. " + formatShardStatus(percolateResponse));
-        }
-        assertVersionSerializable(percolateResponse);
-    }
-
     public static void assertExists(GetResponse response) {
         String message = String.format(Locale.ROOT, "Expected %s/%s/%s to exist, but does not", response.getIndex(), response.getType(), response.getId());
         assertThat(message, response.isExists(), is(true));
@@ -329,12 +317,6 @@ public class ElasticsearchAssertions {
         } catch (Exception e) {
             fail("SearchPhaseExecutionException expected but got " + e.getClass());
         }
-    }
-
-    public static void assertFailures(PercolateResponse percolateResponse) {
-        assertThat("Expected at least one shard failure, got none",
-            percolateResponse.getShardFailures().length, greaterThan(0));
-        assertVersionSerializable(percolateResponse);
     }
 
     public static void assertNoFailures(BroadcastResponse response) {
@@ -645,7 +627,20 @@ public class ElasticsearchAssertions {
     }
 
     public static void assertVersionSerializable(Version version, Streamable streamable) {
-        assertVersionSerializable(version, streamable, null);
+        /*
+         * If possible we fetch the NamedWriteableRegistry from the test cluster. That is the only way to make sure that we properly handle
+         * when plugins register names. If not possible we'll try and set up a registry based on whatever SearchModule registers. But that
+         * is a hack at best - it only covers some things. If you end up with errors below and get to this comment I'm sorry. Please find
+         * a way that sucks less.
+         */
+        NamedWriteableRegistry registry;
+        if (ESIntegTestCase.isInternalCluster()) {
+            registry = ESIntegTestCase.internalCluster().getInstance(NamedWriteableRegistry.class);
+        } else {
+            registry = new NamedWriteableRegistry();
+            new SearchModule(Settings.EMPTY, registry);
+        }
+        assertVersionSerializable(version, streamable, registry);
     }
 
     public static void assertVersionSerializable(Version version, Streamable streamable, NamedWriteableRegistry namedWriteableRegistry) {
@@ -716,7 +711,7 @@ public class ElasticsearchAssertions {
 
     /**
      * Applies basic assertions on the SearchResponse. This method checks if all shards were successful, if
-     * any of the shards threw an exception and if the response is serializeable.
+     * any of the shards threw an exception and if the response is serializable.
      */
     public static SearchResponse assertSearchResponse(SearchRequestBuilder request) {
         return assertSearchResponse(request.get());
@@ -724,7 +719,7 @@ public class ElasticsearchAssertions {
 
     /**
      * Applies basic assertions on the SearchResponse. This method checks if all shards were successful, if
-     * any of the shards threw an exception and if the response is serializeable.
+     * any of the shards threw an exception and if the response is serializable.
      */
     public static SearchResponse assertSearchResponse(SearchResponse response) {
         assertNoFailures(response);

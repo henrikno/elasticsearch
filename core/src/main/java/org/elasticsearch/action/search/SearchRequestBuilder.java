@@ -28,10 +28,10 @@ import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.Template;
 import org.elasticsearch.search.Scroll;
-import org.elasticsearch.search.aggregations.AggregatorBuilder;
-import org.elasticsearch.search.aggregations.pipeline.PipelineAggregatorBuilder;
+import org.elasticsearch.search.aggregations.AggregationBuilder;
+import org.elasticsearch.search.aggregations.PipelineAggregatorBuilder;
+import org.elasticsearch.search.slice.SliceBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.fetch.innerhits.InnerHitsBuilder;
 import org.elasticsearch.search.highlight.HighlightBuilder;
 import org.elasticsearch.search.rescore.RescoreBuilder;
 import org.elasticsearch.search.sort.SortBuilder;
@@ -167,7 +167,7 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
      *
      * @see org.elasticsearch.index.query.QueryBuilders
      */
-    public SearchRequestBuilder setQuery(QueryBuilder<?> queryBuilder) {
+    public SearchRequestBuilder setQuery(QueryBuilder queryBuilder) {
         sourceBuilder().query(queryBuilder);
         return this;
     }
@@ -176,7 +176,7 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
      * Sets a filter that will be executed after the query has been executed and only has affect on the search hits
      * (not aggregations). This filter is always executed as last filtering mechanism.
      */
-    public SearchRequestBuilder setPostFilter(QueryBuilder<?> postFilter) {
+    public SearchRequestBuilder setPostFilter(QueryBuilder postFilter) {
         sourceBuilder().postFilter(postFilter);
         return this;
     }
@@ -353,6 +353,11 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
         return this;
     }
 
+    public SearchRequestBuilder slice(SliceBuilder builder) {
+        sourceBuilder().slice(builder);
+        return this;
+    }
+
     /**
      * Applies when sorting, and controls if scores will be tracked as well. Defaults to
      * <tt>false</tt>.
@@ -374,7 +379,7 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
     /**
      * Adds an aggregation to the search operation.
      */
-    public SearchRequestBuilder addAggregation(AggregatorBuilder<?> aggregation) {
+    public SearchRequestBuilder addAggregation(AggregationBuilder aggregation) {
         sourceBuilder().aggregation(aggregation);
         return this;
     }
@@ -393,17 +398,10 @@ public class SearchRequestBuilder extends ActionRequestBuilder<SearchRequest, Se
     }
 
     /**
-     * Delegates to
-     * {@link org.elasticsearch.search.suggest.SuggestBuilder#addSuggestion(org.elasticsearch.search.suggest.SuggestBuilder.SuggestionBuilder)}
-     * .
+     * Delegates to {@link SearchSourceBuilder#suggest(SuggestBuilder)}
      */
     public SearchRequestBuilder suggest(SuggestBuilder suggestBuilder) {
         sourceBuilder().suggest(suggestBuilder);
-        return this;
-    }
-
-    public SearchRequestBuilder innerHits(InnerHitsBuilder innerHitsBuilder) {
-        sourceBuilder().innerHits(innerHitsBuilder);
         return this;
     }
 

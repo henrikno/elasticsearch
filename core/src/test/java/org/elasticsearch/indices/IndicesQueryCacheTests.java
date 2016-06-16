@@ -35,6 +35,7 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.common.lucene.index.ElasticsearchDirectoryReader;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexModule;
 import org.elasticsearch.index.cache.query.QueryCacheStats;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.indices.IndicesQueryCache;
@@ -54,12 +55,12 @@ public class IndicesQueryCacheTests extends ESTestCase {
 
         @Override
         public boolean equals(Object obj) {
-            return super.equals(obj) && id == ((DummyQuery) obj).id;
+            return sameClassAs(obj) && id == ((DummyQuery) obj).id;
         }
 
         @Override
         public int hashCode() {
-            return 31 * super.hashCode() + id;
+            return 31 * classHash() + id;
         }
 
         @Override
@@ -84,7 +85,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
         Directory dir = newDirectory();
         IndexWriter w = new IndexWriter(dir, newIndexWriterConfig());
         w.addDocument(new Document());
-        DirectoryReader r = DirectoryReader.open(w, false);
+        DirectoryReader r = DirectoryReader.open(w);
         w.close();
         ShardId shard = new ShardId("index", "_na_", 0);
         r = ElasticsearchDirectoryReader.wrap(r, shard);
@@ -93,6 +94,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
 
         Settings settings = Settings.builder()
                 .put(IndicesQueryCache.INDICES_CACHE_QUERY_COUNT_SETTING.getKey(), 10)
+                .put(IndicesQueryCache.INDICES_QUERIES_CACHE_ALL_SEGMENTS_SETTING.getKey(), true)
                 .build();
         IndicesQueryCache cache = new IndicesQueryCache(settings);
         s.setQueryCache(cache);
@@ -154,7 +156,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
         Directory dir1 = newDirectory();
         IndexWriter w1 = new IndexWriter(dir1, newIndexWriterConfig());
         w1.addDocument(new Document());
-        DirectoryReader r1 = DirectoryReader.open(w1, false);
+        DirectoryReader r1 = DirectoryReader.open(w1);
         w1.close();
         ShardId shard1 = new ShardId("index", "_na_", 0);
         r1 = ElasticsearchDirectoryReader.wrap(r1, shard1);
@@ -164,7 +166,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
         Directory dir2 = newDirectory();
         IndexWriter w2 = new IndexWriter(dir2, newIndexWriterConfig());
         w2.addDocument(new Document());
-        DirectoryReader r2 = DirectoryReader.open(w2, false);
+        DirectoryReader r2 = DirectoryReader.open(w2);
         w2.close();
         ShardId shard2 = new ShardId("index", "_na_", 1);
         r2 = ElasticsearchDirectoryReader.wrap(r2, shard2);
@@ -173,6 +175,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
 
         Settings settings = Settings.builder()
                 .put(IndicesQueryCache.INDICES_CACHE_QUERY_COUNT_SETTING.getKey(), 10)
+                .put(IndicesQueryCache.INDICES_QUERIES_CACHE_ALL_SEGMENTS_SETTING.getKey(), true)
                 .build();
         IndicesQueryCache cache = new IndicesQueryCache(settings);
         s1.setQueryCache(cache);
@@ -279,7 +282,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
         Directory dir1 = newDirectory();
         IndexWriter w1 = new IndexWriter(dir1, newIndexWriterConfig());
         w1.addDocument(new Document());
-        DirectoryReader r1 = DirectoryReader.open(w1, false);
+        DirectoryReader r1 = DirectoryReader.open(w1);
         w1.close();
         ShardId shard1 = new ShardId("index", "_na_", 0);
         r1 = ElasticsearchDirectoryReader.wrap(r1, shard1);
@@ -289,7 +292,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
         Directory dir2 = newDirectory();
         IndexWriter w2 = new IndexWriter(dir2, newIndexWriterConfig());
         w2.addDocument(new Document());
-        DirectoryReader r2 = DirectoryReader.open(w2, false);
+        DirectoryReader r2 = DirectoryReader.open(w2);
         w2.close();
         ShardId shard2 = new ShardId("index", "_na_", 1);
         r2 = ElasticsearchDirectoryReader.wrap(r2, shard2);
@@ -298,6 +301,7 @@ public class IndicesQueryCacheTests extends ESTestCase {
 
         Settings settings = Settings.builder()
                 .put(IndicesQueryCache.INDICES_CACHE_QUERY_COUNT_SETTING.getKey(), 10)
+                .put(IndicesQueryCache.INDICES_QUERIES_CACHE_ALL_SEGMENTS_SETTING.getKey(), true)
                 .build();
         IndicesQueryCache cache = new IndicesQueryCache(settings);
         s1.setQueryCache(cache);

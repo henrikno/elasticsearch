@@ -19,38 +19,50 @@
 
 package org.elasticsearch.plugins;
 
+import joptsimple.OptionSet;
+import org.elasticsearch.cli.SettingCommand;
+import org.elasticsearch.cli.Terminal;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.node.internal.InternalSettingsPreparer;
+
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-
-import org.elasticsearch.common.cli.CliTool;
-import org.elasticsearch.common.cli.Terminal;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.env.Environment;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 /**
  * A command for the plugin cli to list plugins installed in elasticsearch.
  */
-class ListPluginsCommand extends CliTool.Command {
+class ListPluginsCommand extends SettingCommand {
 
-    ListPluginsCommand(Terminal terminal) {
-        super(terminal);
+    ListPluginsCommand() {
+        super("Lists installed elasticsearch plugins");
     }
 
     @Override
-    public CliTool.ExitStatus execute(Settings settings, Environment env) throws Exception {
+    protected void execute(Terminal terminal, OptionSet options, Map<String, String> settings) throws Exception {
+        final Environment env = InternalSettingsPreparer.prepareEnvironment(Settings.EMPTY, terminal, settings);
         if (Files.exists(env.pluginsFile()) == false) {
             throw new IOException("Plugins directory missing: " + env.pluginsFile());
         }
 
         terminal.println(Terminal.Verbosity.VERBOSE, "Plugins directory: " + env.pluginsFile());
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(env.pluginsFile())) {
-            for (Path plugin : stream) {
-                terminal.println(plugin.getFileName().toString());
+        final List<Path> plugins = new ArrayList<>();
+        try (DirectoryStream<Path> paths = Files.newDirectoryStream(env.pluginsFile())) {
+            for (Path plugin : paths) {
+                plugins.add(plugin);
             }
         }
-
-        return CliTool.ExitStatus.OK;
+        Collections.sort(plugins);
+        for (final Path plugin : plugins) {
+            terminal.println(plugin.getFileName().toString());
+            PluginInfo info = PluginInfo.readFromProperties(env.pluginsFile().resolve(plugin.toAbsolutePath()));
+            terminal.println(Terminal.Verbosity.VERBOSE, info.toString());
+        }
     }
 }

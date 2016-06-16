@@ -39,7 +39,7 @@ Here we configure the DFRSimilarity so it can be referenced as
 {
   "book" : {
     "properties" : {
-      "title" : { "type" : "string", "similarity" : "my_similarity" }
+      "title" : { "type" : "text", "similarity" : "my_similarity" }
     }
 }
 --------------------------------------------------
@@ -73,10 +73,11 @@ This similarity has the following options:
 [horizontal]
 `k1`::
     Controls non-linear term frequency normalization
-    (saturation).
+    (saturation). The default value is `1.2`.
 
 `b`::
     Controls to what degree document length normalizes tf values.
+    The default value is `0.75`.
 
 `discount_overlaps`::
     Determines whether overlap tokens (Tokens with
@@ -117,6 +118,8 @@ This similarity has the following options:
 
 [horizontal]
 `independence_measure`:: Possible values `standardized`, `saturated`, `chisquared`.
+
+Type name: `DFI`
 
 [float]
 [[ib]]

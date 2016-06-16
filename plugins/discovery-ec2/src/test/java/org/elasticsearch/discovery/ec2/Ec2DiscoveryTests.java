@@ -23,12 +23,14 @@ import com.amazonaws.services.ec2.model.Tag;
 import org.elasticsearch.Version;
 import org.elasticsearch.cloud.aws.AwsEc2Service;
 import org.elasticsearch.cloud.aws.AwsEc2Service.DISCOVERY_EC2;
+import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.LocalTransportAddress;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.transport.MockTransportService;
+import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.junit.AfterClass;
@@ -52,7 +54,7 @@ public class Ec2DiscoveryTests extends ESTestCase {
 
     @BeforeClass
     public static void createThreadPool() {
-        threadPool = new ThreadPool(Ec2DiscoveryTests.class.getName());
+        threadPool = new TestThreadPool(Ec2DiscoveryTests.class.getName());
     }
 
     @AfterClass
@@ -65,7 +67,7 @@ public class Ec2DiscoveryTests extends ESTestCase {
 
     @Before
     public void createTransportService() {
-        transportService = MockTransportService.local(Settings.EMPTY, Version.CURRENT, threadPool);
+        transportService = MockTransportService.local(Settings.EMPTY, Version.CURRENT, threadPool, ClusterName.DEFAULT);
     }
 
     protected List<DiscoveryNode> buildDynamicNodes(Settings nodeSettings, int nodes) {
@@ -191,7 +193,7 @@ public class Ec2DiscoveryTests extends ESTestCase {
             tagsList.add(tags);
         }
 
-        logger.info("started [{}] instances with [{}] stage=prod tag");
+        logger.info("started [{}] instances with [{}] stage=prod tag", nodes, prodInstances);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(nodeSettings, nodes, tagsList);
         assertThat(discoveryNodes, hasSize(prodInstances));
     }
@@ -222,7 +224,7 @@ public class Ec2DiscoveryTests extends ESTestCase {
             tagsList.add(tags);
         }
 
-        logger.info("started [{}] instances with [{}] stage=prod tag");
+        logger.info("started [{}] instances with [{}] stage=prod tag", nodes, prodInstances);
         List<DiscoveryNode> discoveryNodes = buildDynamicNodes(nodeSettings, nodes, tagsList);
         assertThat(discoveryNodes, hasSize(prodInstances));
     }
@@ -250,7 +252,7 @@ public class Ec2DiscoveryTests extends ESTestCase {
     }
 
     public void testGetNodeListCached() throws Exception {
-        Settings.Builder builder = Settings.settingsBuilder()
+        Settings.Builder builder = Settings.builder()
                 .put(DISCOVERY_EC2.NODE_CACHE_TIME_SETTING.getKey(), "500ms");
         AwsEc2Service awsEc2Service = new AwsEc2ServiceMock(Settings.EMPTY, 1, null);
         DummyEc2HostProvider provider = new DummyEc2HostProvider(builder.build(), transportService, awsEc2Service, Version.CURRENT) {

@@ -39,14 +39,14 @@ import static org.hamcrest.Matchers.not;
 /**
  * Test CORS where the allow origin value is a regular expression.
  */
-@ClusterScope(scope = Scope.SUITE, numDataNodes = 1)
+@ClusterScope(scope = Scope.SUITE, supportsDedicatedMasters = false, numDataNodes = 1)
 public class CorsRegexIT extends ESIntegTestCase {
 
     protected static final ESLogger logger = Loggers.getLogger(CorsRegexIT.class);
 
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
-        return Settings.settingsBuilder()
+        return Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
                 .put(SETTING_CORS_ALLOW_ORIGIN.getKey(), "/https?:\\/\\/localhost(:[0-9]+)?/")
                 .put(SETTING_CORS_ALLOW_CREDENTIALS.getKey(), true)

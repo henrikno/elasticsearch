@@ -20,8 +20,12 @@ package org.elasticsearch.test;
 
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.plugins.Plugin;
+
+import java.util.Arrays;
+import java.util.List;
 
 public final class InternalSettingsPlugin extends Plugin {
     @Override
@@ -31,16 +35,18 @@ public final class InternalSettingsPlugin extends Plugin {
 
     @Override
     public String description() {
-        return "a plugin that allows to set values for internal settings which are can't be set via the ordinary API without this pluging installed";
+        return "a plugin that allows to set values for internal settings which are can't be set via the ordinary API without this plugin installed";
     }
 
-    public static final Setting<Integer> VERSION_CREATED = Setting.intSetting("index.version.created", 0, false, Setting.Scope.INDEX);
-    public static final Setting<Boolean> MERGE_ENABLED = Setting.boolSetting("index.merge.enabled", true, false, Setting.Scope.INDEX);
-    public static final Setting<Long> INDEX_CREATION_DATE_SETTING = Setting.longSetting(IndexMetaData.SETTING_CREATION_DATE, -1, -1, false, Setting.Scope.INDEX);
+    public static final Setting<Integer> VERSION_CREATED =
+        Setting.intSetting("index.version.created", 0, Property.IndexScope, Property.NodeScope);
+    public static final Setting<Boolean> MERGE_ENABLED =
+        Setting.boolSetting("index.merge.enabled", true, Property.IndexScope, Property.NodeScope);
+    public static final Setting<Long> INDEX_CREATION_DATE_SETTING =
+        Setting.longSetting(IndexMetaData.SETTING_CREATION_DATE, -1, -1, Property.IndexScope, Property.NodeScope);
 
-    public void onModule(SettingsModule module) {
-        module.registerSetting(VERSION_CREATED);
-        module.registerSetting(MERGE_ENABLED);
-        module.registerSetting(INDEX_CREATION_DATE_SETTING);
+    @Override
+    public List<Setting<?>> getSettings() {
+        return Arrays.asList(VERSION_CREATED, MERGE_ENABLED, INDEX_CREATION_DATE_SETTING);
     }
 }

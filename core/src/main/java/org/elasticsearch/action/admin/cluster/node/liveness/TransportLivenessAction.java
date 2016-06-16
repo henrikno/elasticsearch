@@ -20,7 +20,7 @@
 package org.elasticsearch.action.admin.cluster.node.liveness;
 
 import org.elasticsearch.cluster.ClusterName;
-import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportChannel;
@@ -38,7 +38,8 @@ public final class TransportLivenessAction implements TransportRequestHandler<Li
                                    ClusterService clusterService, TransportService transportService) {
         this.clusterService = clusterService;
         this.clusterName = clusterName;
-        transportService.registerRequestHandler(NAME, LivenessRequest::new, ThreadPool.Names.SAME, this);
+        transportService.registerRequestHandler(NAME, LivenessRequest::new, ThreadPool.Names.SAME,
+            false, false /*can not trip circuit breaker*/, this);
     }
 
     @Override

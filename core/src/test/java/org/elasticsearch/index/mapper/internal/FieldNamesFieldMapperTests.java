@@ -35,6 +35,7 @@ import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.mapper.ParsedDocument;
+import org.elasticsearch.index.mapper.TermBasedFieldType;
 import org.elasticsearch.indices.IndicesModule;
 import org.elasticsearch.indices.mapper.MapperRegistry;
 import org.elasticsearch.test.ESSingleNodeTestCase;
@@ -102,7 +103,7 @@ public class FieldNamesFieldMapperTests extends ESSingleNodeTestCase {
                 .endObject()
                 .bytes());
 
-        assertFieldNames(set("a", "b", "b.c", "_uid", "_type", "_version", "_source", "_all"), doc);
+        assertFieldNames(set("a", "a.keyword", "b", "b.c", "_uid", "_type", "_version", "_source", "_all"), doc);
     }
 
     public void testExplicitEnabled() throws Exception {
@@ -119,7 +120,7 @@ public class FieldNamesFieldMapperTests extends ESSingleNodeTestCase {
             .endObject()
             .bytes());
 
-        assertFieldNames(set("field", "_uid", "_type", "_version", "_source", "_all"), doc);
+        assertFieldNames(set("field", "field.keyword", "_uid", "_type", "_version", "_source", "_all"), doc);
     }
 
     public void testDisabled() throws Exception {
@@ -177,7 +178,7 @@ public class FieldNamesFieldMapperTests extends ESSingleNodeTestCase {
 
         }
 
-        private static class DummyFieldType extends MappedFieldType {
+        private static class DummyFieldType extends TermBasedFieldType {
 
             public DummyFieldType() {
                 super();

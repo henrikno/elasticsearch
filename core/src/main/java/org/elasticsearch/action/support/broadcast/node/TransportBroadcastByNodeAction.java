@@ -25,7 +25,6 @@ import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.NoShardAvailableActionException;
 import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.action.support.ActionFilters;
-import org.elasticsearch.action.support.ChildTaskRequest;
 import org.elasticsearch.action.support.DefaultShardOperationFailedException;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.action.support.IndicesOptions;
@@ -33,7 +32,6 @@ import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.action.support.broadcast.BroadcastRequest;
 import org.elasticsearch.action.support.broadcast.BroadcastResponse;
 import org.elasticsearch.action.support.broadcast.BroadcastShardOperationFailedException;
-import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -41,6 +39,7 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardsIterator;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
@@ -86,6 +85,20 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
     final String transportNodeBroadcastAction;
 
     public TransportBroadcastByNodeAction(
+        Settings settings,
+        String actionName,
+        ThreadPool threadPool,
+        ClusterService clusterService,
+        TransportService transportService,
+        ActionFilters actionFilters,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        Supplier<Request> request,
+        String executor) {
+        this(settings, actionName, threadPool, clusterService, transportService, actionFilters, indexNameExpressionResolver, request,
+            executor, true);
+    }
+
+    public TransportBroadcastByNodeAction(
             Settings settings,
             String actionName,
             ThreadPool threadPool,
@@ -94,7 +107,8 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
             ActionFilters actionFilters,
             IndexNameExpressionResolver indexNameExpressionResolver,
             Supplier<Request> request,
-            String executor) {
+            String executor,
+            boolean canTripCircuitBreaker) {
         super(settings, actionName, threadPool, transportService, actionFilters, indexNameExpressionResolver, request);
 
         this.clusterService = clusterService;
@@ -102,7 +116,8 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
 
         transportNodeBroadcastAction = actionName + "[n]";
 
-        transportService.registerRequestHandler(transportNodeBroadcastAction, NodeRequest::new, executor, new BroadcastByNodeTransportRequestHandler());
+        transportService.registerRequestHandler(transportNodeBroadcastAction, NodeRequest::new, executor, false, canTripCircuitBreaker,
+            new BroadcastByNodeTransportRequestHandler());
     }
 
     private Response newResponse(
@@ -241,7 +256,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
                 throw globalBlockException;
             }
 
-            String[] concreteIndices = indexNameExpressionResolver.concreteIndices(clusterState, request);
+            String[] concreteIndices = indexNameExpressionResolver.concreteIndexNames(clusterState, request);
             ClusterBlockException requestBlockException = checkRequestBlock(clusterState, request, concreteIndices);
             if (requestBlockException != null) {
                 throw requestBlockException;
@@ -300,7 +315,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
             try {
                 NodeRequest nodeRequest = new NodeRequest(node.getId(), request, shards);
                 if (task != null) {
-                    nodeRequest.setParentTask(clusterService.localNode().id(), task.getId());
+                    nodeRequest.setParentTask(clusterService.localNode().getId(), task.getId());
                     taskManager.registerChildTask(task, node.getId());
                 }
                 transportService.sendRequest(node, transportNodeBroadcastAction, nodeRequest, new BaseTransportResponseHandler<NodeResponse>() {
@@ -331,7 +346,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
 
         protected void onNodeResponse(DiscoveryNode node, int nodeIndex, NodeResponse response) {
             if (logger.isTraceEnabled()) {
-                logger.trace("received response for [{}] from node [{}]", actionName, node.id());
+                logger.trace("received response for [{}] from node [{}]", actionName, node.getId());
             }
 
             // this is defensive to protect against the possibility of double invocation
@@ -345,7 +360,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
         }
 
         protected void onNodeFailure(DiscoveryNode node, int nodeIndex, Throwable t) {
-            String nodeId = node.id();
+            String nodeId = node.getId();
             if (logger.isDebugEnabled() && !(t instanceof NodeShouldNotConnectException)) {
                 logger.debug("failed to execute [{}] on node [{}]", t, actionName, nodeId);
             }
@@ -435,7 +450,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
         }
     }
 
-    public class NodeRequest extends ChildTaskRequest implements IndicesRequest {
+    public class NodeRequest extends TransportRequest implements IndicesRequest {
         private String nodeId;
 
         private List<ShardRouting> shards;
@@ -476,7 +491,7 @@ public abstract class TransportBroadcastByNodeAction<Request extends BroadcastRe
             int size = in.readVInt();
             shards = new ArrayList<>(size);
             for (int i = 0; i < size; i++) {
-                shards.add(ShardRouting.readShardRoutingEntry(in));
+                shards.add(new ShardRouting(in));
             }
             nodeId = in.readString();
         }

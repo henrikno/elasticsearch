@@ -30,7 +30,6 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentBuilderString;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.BytesRestResponse;
 import org.elasticsearch.rest.RestChannel;
@@ -85,7 +84,7 @@ public class RestBulkAction extends BaseRestHandler {
             bulkRequest.consistencyLevel(WriteConsistencyLevel.fromString(consistencyLevel));
         }
         bulkRequest.timeout(request.paramAsTime("timeout", BulkShardRequest.DEFAULT_TIMEOUT));
-        bulkRequest.refresh(request.paramAsBoolean("refresh", bulkRequest.refresh()));
+        bulkRequest.setRefreshPolicy(request.param("refresh"));
         bulkRequest.add(request.content(), defaultIndex, defaultType, defaultRouting, defaultFields, defaultPipeline, null, allowExplicitIndex);
 
         client.bulk(bulkRequest, new RestBuilderListener<BulkResponse>(channel) {
@@ -93,6 +92,9 @@ public class RestBulkAction extends BaseRestHandler {
             public RestResponse buildResponse(BulkResponse response, XContentBuilder builder) throws Exception {
                 builder.startObject();
                 builder.field(Fields.TOOK, response.getTookInMillis());
+                if (response.getIngestTookInMillis() != BulkResponse.NO_INGEST_TOOK) {
+                    builder.field(Fields.INGEST_TOOK, response.getIngestTookInMillis());
+                }
                 builder.field(Fields.ERRORS, response.hasFailures());
                 builder.startArray(Fields.ITEMS);
                 for (BulkItemResponse itemResponse : response) {
@@ -109,9 +111,10 @@ public class RestBulkAction extends BaseRestHandler {
     }
 
     static final class Fields {
-        static final XContentBuilderString ITEMS = new XContentBuilderString("items");
-        static final XContentBuilderString ERRORS = new XContentBuilderString("errors");
-        static final XContentBuilderString TOOK = new XContentBuilderString("took");
+        static final String ITEMS = "items";
+        static final String ERRORS = "errors";
+        static final String TOOK = "took";
+        static final String INGEST_TOOK = "ingest_took";
     }
 
 }

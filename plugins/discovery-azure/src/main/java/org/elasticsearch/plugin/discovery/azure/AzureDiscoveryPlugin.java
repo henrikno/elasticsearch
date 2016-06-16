@@ -24,18 +24,22 @@ import org.elasticsearch.cloud.azure.management.AzureComputeService;
 import org.elasticsearch.common.inject.Module;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.discovery.DiscoveryModule;
-import org.elasticsearch.discovery.azure.AzureDiscovery;
 import org.elasticsearch.discovery.azure.AzureUnicastHostsProvider;
+import org.elasticsearch.discovery.zen.ZenDiscovery;
 import org.elasticsearch.plugins.Plugin;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 
 public class AzureDiscoveryPlugin extends Plugin {
 
+    public static final String AZURE = "azure";
     private final Settings settings;
     protected final ESLogger logger = Loggers.getLogger(AzureDiscoveryPlugin.class);
 
@@ -61,23 +65,23 @@ public class AzureDiscoveryPlugin extends Plugin {
 
     public void onModule(DiscoveryModule discoveryModule) {
         if (AzureDiscoveryModule.isDiscoveryReady(settings, logger)) {
-            discoveryModule.addDiscoveryType("azure", AzureDiscovery.class);
-            discoveryModule.addUnicastHostProvider(AzureUnicastHostsProvider.class);
+            discoveryModule.addDiscoveryType(AZURE, ZenDiscovery.class);
+            discoveryModule.addUnicastHostProvider(AZURE, AzureUnicastHostsProvider.class);
         }
     }
 
-    public void onModule(SettingsModule settingsModule) {
-        settingsModule.registerSetting(AzureComputeService.Discovery.REFRESH_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Management.KEYSTORE_PASSWORD_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Management.KEYSTORE_PATH_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Management.KEYSTORE_TYPE_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Management.SUBSCRIPTION_ID_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Management.SERVICE_NAME_SETTING);
-        settingsModule.registerSetting(AzureComputeService.Discovery.HOST_TYPE_SETTING);
-        // Cloud management API settings we need to hide
-        settingsModule.registerSettingsFilter(AzureComputeService.Management.KEYSTORE_PATH_SETTING.getKey());
-        settingsModule.registerSettingsFilter(AzureComputeService.Management.KEYSTORE_PASSWORD_SETTING.getKey());
-        settingsModule.registerSettingsFilter(AzureComputeService.Management.KEYSTORE_TYPE_SETTING.getKey());
-        settingsModule.registerSettingsFilter(AzureComputeService.Management.SUBSCRIPTION_ID_SETTING.getKey());
+    @Override
+    public List<Setting<?>> getSettings() {
+        return Arrays.asList(AzureComputeService.Discovery.REFRESH_SETTING,
+                            AzureComputeService.Management.KEYSTORE_PASSWORD_SETTING,
+                            AzureComputeService.Management.KEYSTORE_PATH_SETTING,
+                            AzureComputeService.Management.KEYSTORE_TYPE_SETTING,
+                            AzureComputeService.Management.SUBSCRIPTION_ID_SETTING,
+                            AzureComputeService.Management.SERVICE_NAME_SETTING,
+                            AzureComputeService.Discovery.HOST_TYPE_SETTING,
+                            AzureComputeService.Discovery.DEPLOYMENT_NAME_SETTING,
+                            AzureComputeService.Discovery.DEPLOYMENT_SLOT_SETTING,
+                            AzureComputeService.Discovery.ENDPOINT_NAME_SETTING);
     }
+
 }

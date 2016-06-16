@@ -38,7 +38,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static org.elasticsearch.common.settings.Settings.settingsBuilder;
+import static org.elasticsearch.action.support.WriteRequest.RefreshPolicy.IMMEDIATE;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.both;
@@ -50,7 +50,7 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
-@ClusterScope(scope= Scope.SUITE, numDataNodes = 1)
+@ClusterScope(scope= Scope.SUITE, supportsDedicatedMasters = false, numDataNodes = 1)
 public class SimpleTTLIT extends ESIntegTestCase {
 
     static private final long PURGE_INTERVAL = 200;
@@ -62,7 +62,7 @@ public class SimpleTTLIT extends ESIntegTestCase {
 
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
-        return settingsBuilder()
+        return Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
                 .put("indices.ttl.interval", PURGE_INTERVAL, TimeUnit.MILLISECONDS)
                 .build();
@@ -93,10 +93,10 @@ public class SimpleTTLIT extends ESIntegTestCase {
         // Index one doc without routing, one doc with routing, one doc with not TTL and no default and one doc with default TTL
         long now = System.currentTimeMillis();
         IndexResponse indexResponse = client().prepareIndex("test", "type1", "1").setSource("field1", "value1")
-                .setTimestamp(String.valueOf(now)).setTTL(providedTTLValue).setRefresh(true).get();
+                .setTimestamp(String.valueOf(now)).setTTL(providedTTLValue).setRefreshPolicy(IMMEDIATE).get();
         assertThat(indexResponse.isCreated(), is(true));
         indexResponse = client().prepareIndex("test", "type1", "with_routing").setSource("field1", "value1")
-                .setTimestamp(String.valueOf(now)).setTTL(providedTTLValue).setRouting("routing").setRefresh(true).get();
+                .setTimestamp(String.valueOf(now)).setTTL(providedTTLValue).setRouting("routing").setRefreshPolicy(IMMEDIATE).get();
         assertThat(indexResponse.isCreated(), is(true));
         indexResponse = client().prepareIndex("test", "type1", "no_ttl").setSource("field1", "value1").get();
         assertThat(indexResponse.isCreated(), is(true));
@@ -215,7 +215,7 @@ public class SimpleTTLIT extends ESIntegTestCase {
         assertTTLMappingEnabled(index, type);
 
         // update some field in the mapping
-        XContentBuilder updateMappingBuilder = jsonBuilder().startObject().startObject("properties").startObject("otherField").field("type", "text").endObject().endObject();
+        XContentBuilder updateMappingBuilder = jsonBuilder().startObject().startObject("properties").startObject("otherField").field("type", "text").endObject().endObject().endObject();
         PutMappingResponse putMappingResponse = client().admin().indices().preparePutMapping(index).setType(type).setSource(updateMappingBuilder).get();
         assertAcked(putMappingResponse);
 
@@ -246,7 +246,7 @@ public class SimpleTTLIT extends ESIntegTestCase {
         long secondTtl = aLongTime * 2;
         long thirdTtl = aLongTime * 1;
         IndexResponse indexResponse = client().prepareIndex("test", "type1", "1").setSource("field1", "value1")
-                .setTTL(firstTtl).setRefresh(true).get();
+                .setTTL(firstTtl).setRefreshPolicy(IMMEDIATE).get();
         assertTrue(indexResponse.isCreated());
         assertThat(getTtl("type1", 1), both(lessThanOrEqualTo(firstTtl)).and(greaterThan(secondTtl)));
 

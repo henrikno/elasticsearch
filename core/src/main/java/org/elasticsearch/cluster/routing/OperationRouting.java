@@ -27,24 +27,20 @@ import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.math.MathUtils;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.ShardNotFoundException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
-/**
- *
- */
 public class OperationRouting extends AbstractComponent {
-
 
     private final AwarenessAllocationDecider awarenessAllocationDecider;
 
@@ -54,21 +50,17 @@ public class OperationRouting extends AbstractComponent {
         this.awarenessAllocationDecider = awarenessAllocationDecider;
     }
 
-    public ShardIterator indexShards(ClusterState clusterState, String index, String type, String id, @Nullable String routing) {
+    public ShardIterator indexShards(ClusterState clusterState, String index, String id, @Nullable String routing) {
         return shards(clusterState, index, id, routing).shardsIt();
     }
 
-    public ShardIterator getShards(ClusterState clusterState, String index, String type, String id, @Nullable String routing, @Nullable String preference) {
-        return preferenceActiveShardIterator(shards(clusterState, index, id, routing), clusterState.nodes().localNodeId(), clusterState.nodes(), preference);
+    public ShardIterator getShards(ClusterState clusterState, String index, String id, @Nullable String routing, @Nullable String preference) {
+        return preferenceActiveShardIterator(shards(clusterState, index, id, routing), clusterState.nodes().getLocalNodeId(), clusterState.nodes(), preference);
     }
 
     public ShardIterator getShards(ClusterState clusterState, String index, int shardId, @Nullable String preference) {
         final IndexShardRoutingTable indexShard = clusterState.getRoutingTable().shardRoutingTable(index, shardId);
-        return preferenceActiveShardIterator(indexShard, clusterState.nodes().localNodeId(), clusterState.nodes(), preference);
-    }
-
-    public GroupShardsIterator broadcastDeleteShards(ClusterState clusterState, String index) {
-        return indexRoutingTable(clusterState, index).groupByShardsIt();
+        return preferenceActiveShardIterator(indexShard, clusterState.nodes().getLocalNodeId(), clusterState.nodes(), preference);
     }
 
     public int searchShardsCount(ClusterState clusterState, String[] concreteIndices, @Nullable Map<String, Set<String>> routing) {
@@ -80,7 +72,7 @@ public class OperationRouting extends AbstractComponent {
         final Set<IndexShardRoutingTable> shards = computeTargetedShards(clusterState, concreteIndices, routing);
         final Set<ShardIterator> set = new HashSet<>(shards.size());
         for (IndexShardRoutingTable shard : shards) {
-            ShardIterator iterator = preferenceActiveShardIterator(shard, clusterState.nodes().localNodeId(), clusterState.nodes(), preference);
+            ShardIterator iterator = preferenceActiveShardIterator(shard, clusterState.nodes().getLocalNodeId(), clusterState.nodes(), preference);
             if (iterator != null) {
                 set.add(iterator);
             }
@@ -164,10 +156,14 @@ public class OperationRouting extends AbstractComponent {
             }
             preferenceType = Preference.parse(preference);
             switch (preferenceType) {
-                case PREFER_NODE:
-                    return indexShard.preferNodeActiveInitializingShardsIt(preference.substring(Preference.PREFER_NODE.type().length() + 1));
+                case PREFER_NODES:
+                    final Set<String> nodesIds =
+                            Arrays.stream(
+                                    preference.substring(Preference.PREFER_NODES.type().length() + 1).split(",")
+                            ).collect(Collectors.toSet());
+                    return indexShard.preferNodeActiveInitializingShardsIt(nodesIds);
                 case LOCAL:
-                    return indexShard.preferNodeActiveInitializingShardsIt(localNodeId);
+                    return indexShard.preferNodeActiveInitializingShardsIt(Collections.singleton(localNodeId));
                 case PRIMARY:
                     return indexShard.primaryActiveInitializingShardIt();
                 case REPLICA:
@@ -183,8 +179,8 @@ public class OperationRouting extends AbstractComponent {
                     ensureNodeIdExists(nodes, nodeId);
                     return indexShard.onlyNodeActiveInitializingShardsIt(nodeId);
                 case ONLY_NODES:
-                    String nodeAttribute = preference.substring(Preference.ONLY_NODES.type().length() + 1);
-                    return indexShard.onlyNodeSelectorActiveInitializingShardsIt(nodeAttribute, nodes);
+                    String nodeAttributes = preference.substring(Preference.ONLY_NODES.type().length() + 1);
+                    return indexShard.onlyNodeSelectorActiveInitializingShardsIt(nodeAttributes.split(","), nodes);
                 default:
                     throw new IllegalArgumentException("unknown preference [" + preferenceType + "]");
             }
@@ -224,18 +220,20 @@ public class OperationRouting extends AbstractComponent {
         return new ShardId(indexMetaData.getIndex(), generateShardId(indexMetaData, id, routing));
     }
 
-    private int generateShardId(IndexMetaData indexMetaData, String id, @Nullable String routing) {
+    static int generateShardId(IndexMetaData indexMetaData, String id, @Nullable String routing) {
         final int hash;
         if (routing == null) {
             hash = Murmur3HashFunction.hash(id);
         } else {
             hash = Murmur3HashFunction.hash(routing);
         }
-        return MathUtils.mod(hash, indexMetaData.getNumberOfShards());
+        // we don't use IMD#getNumberOfShards since the index might have been shrunk such that we need to use the size
+        // of original index to hash documents
+        return Math.floorMod(hash, indexMetaData.getRoutingNumShards()) / indexMetaData.getRoutingFactor();
     }
 
     private void ensureNodeIdExists(DiscoveryNodes nodes, String nodeId) {
-        if (!nodes.dataNodes().keys().contains(nodeId)) {
+        if (!nodes.getDataNodes().keys().contains(nodeId)) {
             throw new IllegalArgumentException("No data node with id[" + nodeId + "] found");
         }
     }

@@ -19,9 +19,9 @@
 
 package org.elasticsearch.aliases;
 
+import org.apache.lucene.search.join.ScoreMode;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.admin.indices.alias.Alias;
-import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest;
 import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequest.AliasActions;
 import org.elasticsearch.action.admin.indices.alias.IndicesAliasesRequestBuilder;
 import org.elasticsearch.action.admin.indices.alias.exists.AliasesExistResponse;
@@ -29,12 +29,14 @@ import org.elasticsearch.action.admin.indices.alias.get.GetAliasesResponse;
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequestBuilder;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.WriteRequest.RefreshPolicy;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.AliasAction;
 import org.elasticsearch.cluster.metadata.AliasMetaData;
 import org.elasticsearch.cluster.metadata.AliasOrIndex;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.StopWatch;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -64,7 +66,6 @@ import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_BLOCKS_ME
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_BLOCKS_READ;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_BLOCKS_WRITE;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_READ_ONLY;
-import static org.elasticsearch.common.settings.Settings.settingsBuilder;
 import static org.elasticsearch.index.query.QueryBuilders.hasChildQuery;
 import static org.elasticsearch.index.query.QueryBuilders.hasParentQuery;
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
@@ -163,7 +164,7 @@ public class IndexAliasesIT extends ESIntegTestCase {
 
     public void testSearchingFilteringAliasesSingleIndex() throws Exception {
         logger.info("--> creating index [test]");
-        assertAcked(prepareCreate("test").addMapping("type1", "id", "type=text", "name", "type=text"));
+        assertAcked(prepareCreate("test").addMapping("type1", "id", "type=text", "name", "type=text,fielddata=true"));
 
         ensureGreen();
 
@@ -175,10 +176,15 @@ public class IndexAliasesIT extends ESIntegTestCase {
         assertAcked(admin().indices().prepareAliases().addAlias("test", "tests", termQuery("name", "test")));
 
         logger.info("--> indexing against [test]");
-        client().index(indexRequest("test").type("type1").id("1").source(source("1", "foo test")).refresh(true)).actionGet();
-        client().index(indexRequest("test").type("type1").id("2").source(source("2", "bar test")).refresh(true)).actionGet();
-        client().index(indexRequest("test").type("type1").id("3").source(source("3", "baz test")).refresh(true)).actionGet();
-        client().index(indexRequest("test").type("type1").id("4").source(source("4", "something else")).refresh(true)).actionGet();
+        client().index(indexRequest("test").type("type1").id("1").source(source("1", "foo test")).setRefreshPolicy(RefreshPolicy.IMMEDIATE))
+                .actionGet();
+        client().index(indexRequest("test").type("type1").id("2").source(source("2", "bar test")).setRefreshPolicy(RefreshPolicy.IMMEDIATE))
+                .actionGet();
+        client().index(indexRequest("test").type("type1").id("3").source(source("3", "baz test")).setRefreshPolicy(RefreshPolicy.IMMEDIATE))
+                .actionGet();
+        client().index(
+                indexRequest("test").type("type1").id("4").source(source("4", "something else")).setRefreshPolicy(RefreshPolicy.IMMEDIATE))
+                .actionGet();
 
         logger.info("--> checking single filtering alias search");
         SearchResponse searchResponse = client().prepareSearch("foos").setQuery(QueryBuilders.matchAllQuery()).get();
@@ -447,7 +453,7 @@ public class IndexAliasesIT extends ESIntegTestCase {
 
     public void testWaitForAliasCreationSingleShard() throws Exception {
         logger.info("--> creating index [test]");
-        assertAcked(admin().indices().create(createIndexRequest("test").settings(settingsBuilder().put("index.number_of_replicas", 0).put("index.number_of_shards", 1))).get());
+        assertAcked(admin().indices().create(createIndexRequest("test").settings(Settings.builder().put("index.number_of_replicas", 0).put("index.number_of_shards", 1))).get());
 
         ensureGreen();
 
@@ -477,7 +483,7 @@ public class IndexAliasesIT extends ESIntegTestCase {
             });
         }
         executor.shutdown();
-        boolean done = executor.awaitTermination(10, TimeUnit.SECONDS);
+        boolean done = executor.awaitTermination(20, TimeUnit.SECONDS);
         assertThat(done, equalTo(true));
         if (!done) {
             executor.shutdownNow();
@@ -1056,8 +1062,8 @@ public class IndexAliasesIT extends ESIntegTestCase {
         client().prepareIndex("my-index", "child", "2").setSource("{}").setParent("1").get();
         refresh();
 
-        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter1", hasChildQuery("child", matchAllQuery())));
-        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("parent", matchAllQuery())));
+        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter1", hasChildQuery("child", matchAllQuery(), ScoreMode.None)));
+        assertAcked(admin().indices().prepareAliases().addAlias("my-index", "filter2", hasParentQuery("parent", matchAllQuery(), false)));
 
         SearchResponse response = client().prepareSearch("filter1").get();
         assertHitCount(response, 1);

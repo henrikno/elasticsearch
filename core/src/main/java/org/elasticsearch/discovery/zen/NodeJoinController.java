@@ -19,7 +19,6 @@
 package org.elasticsearch.discovery.zen;
 
 import org.elasticsearch.ElasticsearchTimeoutException;
-import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateUpdateTask;
 import org.elasticsearch.cluster.NotMasterException;
@@ -28,12 +27,13 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.RoutingService;
 import org.elasticsearch.cluster.routing.allocation.RoutingAllocation;
-import org.elasticsearch.cluster.service.InternalClusterService;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.discovery.DiscoverySettings;
+import org.elasticsearch.discovery.zen.elect.ElectMasterService;
 import org.elasticsearch.discovery.zen.membership.MembershipAction;
 
 import java.util.ArrayList;
@@ -54,6 +54,7 @@ public class NodeJoinController extends AbstractComponent {
 
     final ClusterService clusterService;
     final RoutingService routingService;
+    final ElectMasterService electMaster;
     final DiscoverySettings discoverySettings;
     final AtomicBoolean accumulateJoins = new AtomicBoolean(false);
 
@@ -63,10 +64,11 @@ public class NodeJoinController extends AbstractComponent {
 
     protected final Map<DiscoveryNode, List<MembershipAction.JoinCallback>> pendingJoinRequests = new HashMap<>();
 
-    public NodeJoinController(ClusterService clusterService, RoutingService routingService, DiscoverySettings discoverySettings, Settings settings) {
+    public NodeJoinController(ClusterService clusterService, RoutingService routingService, ElectMasterService electMaster, DiscoverySettings discoverySettings, Settings settings) {
         super(settings);
         this.clusterService = clusterService;
         this.routingService = routingService;
+        this.electMaster = electMaster;
         this.discoverySettings = discoverySettings;
     }
 
@@ -87,7 +89,7 @@ public class NodeJoinController extends AbstractComponent {
         assert accumulateJoins.get() : "waitToBeElectedAsMaster is called we are not accumulating joins";
 
         final CountDownLatch done = new CountDownLatch(1);
-        final ElectionContext newContext = new ElectionContext(callback, requiredMasterJoins, clusterService) {
+        final ElectionContext newContext = new ElectionContext(callback, requiredMasterJoins) {
             @Override
             void onClose() {
                 if (electionContext.compareAndSet(this, null)) {
@@ -241,13 +243,13 @@ public class NodeJoinController extends AbstractComponent {
                 // Take into account the previous known nodes, if they happen not to be available
                 // then fault detection will remove these nodes.
 
-                if (currentState.nodes().masterNode() != null) {
+                if (currentState.nodes().getMasterNode() != null) {
                     // TODO can we tie break here? we don't have a remote master cluster state version to decide on
-                    logger.trace("join thread elected local node as master, but there is already a master in place: {}", currentState.nodes().masterNode());
+                    logger.trace("join thread elected local node as master, but there is already a master in place: {}", currentState.nodes().getMasterNode());
                     throw new NotMasterException("Node [" + clusterService.localNode() + "] not master for join request");
                 }
 
-                DiscoveryNodes.Builder builder = new DiscoveryNodes.Builder(currentState.nodes()).masterNodeId(currentState.nodes().localNode().id());
+                DiscoveryNodes.Builder builder = new DiscoveryNodes.Builder(currentState.nodes()).masterNodeId(currentState.nodes().getLocalNode().getId());
                 // update the fact that we are the master...
                 ClusterBlocks clusterBlocks = ClusterBlocks.builder().blocks(currentState.blocks()).removeGlobalBlock(discoverySettings.getNoMasterBlock()).build();
                 currentState = ClusterState.builder(currentState).nodes(builder).blocks(clusterBlocks).build();
@@ -305,16 +307,14 @@ public class NodeJoinController extends AbstractComponent {
     static abstract class ElectionContext implements ElectionCallback {
         private final ElectionCallback callback;
         private final int requiredMasterJoins;
-        private final ClusterService clusterService;
 
         /** set to true after enough joins have been seen and a cluster update task is submitted to become master */
         final AtomicBoolean pendingSetAsMasterTask = new AtomicBoolean();
         final AtomicBoolean closed = new AtomicBoolean();
 
-        ElectionContext(ElectionCallback callback, int requiredMasterJoins, ClusterService clusterService) {
+        ElectionContext(ElectionCallback callback, int requiredMasterJoins) {
             this.callback = callback;
             this.requiredMasterJoins = requiredMasterJoins;
-            this.clusterService = clusterService;
         }
 
         abstract void onClose();
@@ -322,8 +322,8 @@ public class NodeJoinController extends AbstractComponent {
         @Override
         public void onElectedAsMaster(ClusterState state) {
             assert pendingSetAsMasterTask.get() : "onElectedAsMaster called but pendingSetAsMasterTask is not set";
-            assertClusterStateThread();
-            assert state.nodes().localNodeMaster() : "onElectedAsMaster called but local node is not master";
+            ClusterService.assertClusterStateThread();
+            assert state.nodes().isLocalNodeElectedMaster() : "onElectedAsMaster called but local node is not master";
             if (closed.compareAndSet(false, true)) {
                 try {
                     onClose();
@@ -335,7 +335,7 @@ public class NodeJoinController extends AbstractComponent {
 
         @Override
         public void onFailure(Throwable t) {
-            assertClusterStateThread();
+            ClusterService.assertClusterStateThread();
             if (closed.compareAndSet(false, true)) {
                 try {
                     onClose();
@@ -343,10 +343,6 @@ public class NodeJoinController extends AbstractComponent {
                     callback.onFailure(t);
                 }
             }
-        }
-
-        private void assertClusterStateThread() {
-            assert clusterService instanceof InternalClusterService == false || ((InternalClusterService) clusterService).assertClusterStateThread();
         }
     }
 
@@ -379,14 +375,14 @@ public class NodeJoinController extends AbstractComponent {
                     final DiscoveryNode node = entry.getKey();
                     joinCallbacksToRespondTo.addAll(entry.getValue());
                     iterator.remove();
-                    if (currentState.nodes().nodeExists(node.id())) {
+                    if (currentState.nodes().nodeExists(node.getId())) {
                         logger.debug("received a join request for an existing node [{}]", node);
                     } else {
                         nodeAdded = true;
                         nodesBuilder.put(node);
                         for (DiscoveryNode existingNode : currentState.nodes()) {
-                            if (node.address().equals(existingNode.address())) {
-                                nodesBuilder.remove(existingNode.id());
+                            if (node.getAddress().equals(existingNode.getAddress())) {
+                                nodesBuilder.remove(existingNode.getId());
                                 logger.warn("received join request from node [{}], but found existing node {} with same address, removing existing node", node, existingNode);
                             }
                         }
@@ -450,6 +446,8 @@ public class NodeJoinController extends AbstractComponent {
                     logger.error("unexpected error during [{}]", e, source);
                 }
             }
+
+            NodeJoinController.this.electMaster.logMinimumMasterNodesWarningIfNecessary(oldState, newState);
         }
     }
 }

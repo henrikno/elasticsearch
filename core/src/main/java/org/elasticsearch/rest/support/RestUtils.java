@@ -41,17 +41,6 @@ public class RestUtils {
         }
     };
 
-    public static boolean isBrowser(@Nullable String userAgent) {
-        if (userAgent == null) {
-            return false;
-        }
-        // chrome, safari, firefox, ie
-        if (userAgent.startsWith("Mozilla")) {
-            return true;
-        }
-        return false;
-    }
-
     public static void decodeQueryString(String s, int fromIndex, Map<String, String> params) {
         if (fromIndex < 0) {
             return;
@@ -73,7 +62,7 @@ public class RestUtils {
                     name = decodeComponent(s.substring(pos, i));
                 }
                 pos = i + 1;
-            } else if (c == '&') {
+            } else if (c == '&' || c == ';') {
                 if (name == null && pos != i) {
                     // We haven't seen an `=' so far but moved forward.
                     // Must be a param of the form '&a&' so add it with
@@ -142,13 +131,22 @@ public class RestUtils {
      * @throws IllegalArgumentException if the string contains a malformed
      *                                  escape sequence.
      */
-    @SuppressWarnings("fallthrough")
     public static String decodeComponent(final String s, final Charset charset) {
         if (s == null) {
             return "";
         }
         final int size = s.length();
-        boolean modified = false;
+        if (!decodingNeeded(s, size)) {
+            return s;
+        }
+        final byte[] buf = new byte[size];
+        int pos = decode(s, size, buf);
+        return new String(buf, 0, pos, charset);
+    }
+
+    @SuppressWarnings("fallthrough")
+    private static boolean decodingNeeded(String s, int size) {
+        boolean decodingNeeded = false;
         for (int i = 0; i < size; i++) {
             final char c = s.charAt(i);
             switch (c) {
@@ -156,14 +154,15 @@ public class RestUtils {
                     i++;  // We can skip at least one char, e.g. `%%'.
                     // Fall through.
                 case '+':
-                    modified = true;
+                    decodingNeeded = true;
                     break;
             }
         }
-        if (!modified) {
-            return s;
-        }
-        final byte[] buf = new byte[size];
+        return decodingNeeded;
+    }
+
+    @SuppressWarnings("fallthrough")
+    private static int decode(String s, int size, byte[] buf) {
         int pos = 0;  // position in `buf'.
         for (int i = 0; i < size; i++) {
             char c = s.charAt(i);
@@ -173,24 +172,22 @@ public class RestUtils {
                     break;
                 case '%':
                     if (i == size - 1) {
-                        throw new IllegalArgumentException("unterminated escape"
-                                + " sequence at end of string: " + s);
+                        throw new IllegalArgumentException("unterminated escape sequence at end of string: " + s);
                     }
                     c = s.charAt(++i);
                     if (c == '%') {
                         buf[pos++] = '%';  // "%%" -> "%"
                         break;
                     } else if (i == size - 1) {
-                        throw new IllegalArgumentException("partial escape"
-                                + " sequence at end of string: " + s);
+                        throw new IllegalArgumentException("partial escape sequence at end of string: " + s);
                     }
                     c = decodeHexNibble(c);
                     final char c2 = decodeHexNibble(s.charAt(++i));
                     if (c == Character.MAX_VALUE || c2 == Character.MAX_VALUE) {
                         throw new IllegalArgumentException(
-                                "invalid escape sequence `%" + s.charAt(i - 1)
-                                        + s.charAt(i) + "' at index " + (i - 2)
-                                        + " of: " + s);
+                            "invalid escape sequence `%" + s.charAt(i - 1)
+                                + s.charAt(i) + "' at index " + (i - 2)
+                                + " of: " + s);
                     }
                     c = (char) (c * 16 + c2);
                     // Fall through.
@@ -199,7 +196,7 @@ public class RestUtils {
                     break;
             }
         }
-        return new String(buf, 0, pos, charset);
+        return pos;
     }
 
     /**

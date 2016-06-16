@@ -19,44 +19,6 @@
 
 package org.elasticsearch.search.sort;
 
-import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
-import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
-import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
-import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.fieldValueFactorFunction;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertFirstHit;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertOrderedSearchHits;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSearchResponse;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSecondHit;
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.hasId;
-import static org.hamcrest.Matchers.closeTo;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.lessThan;
-import static org.hamcrest.Matchers.lessThanOrEqualTo;
-import static org.hamcrest.Matchers.not;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Locale;
-import java.util.Random;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.Map.Entry;
-import java.util.concurrent.ExecutionException;
-
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
@@ -67,7 +29,6 @@ import org.elasticsearch.action.search.SearchPhaseExecutionException;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.ShardSearchFailure;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
-import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.mapper.Uid;
@@ -80,13 +41,49 @@ import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.InternalSettingsPlugin;
 import org.hamcrest.Matchers;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map.Entry;
+import java.util.Random;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+
+import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
+import static org.elasticsearch.index.query.QueryBuilders.functionScoreQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
+import static org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders.fieldValueFactorFunction;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertFirstHit;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSearchResponse;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSecondHit;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.hasId;
+import static org.hamcrest.Matchers.closeTo;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
+
 public class FieldSortIT extends ESIntegTestCase {
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
         return pluginList(InternalSettingsPlugin.class);
     }
 
-    @LuceneTestCase.AwaitsFix(bugUrl = "https://github.com/elasticsearch/elasticsearch/issues/9421")
+    @LuceneTestCase.AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/9421")
     public void testIssue8226() {
         int numIndices = between(5, 10);
         final boolean useMapping = randomBoolean();
@@ -180,43 +177,9 @@ public class FieldSortIT extends ESIntegTestCase {
 
     }
 
-    public void testIssue6639() throws ExecutionException, InterruptedException {
-        assertAcked(prepareCreate("$index")
-                .addMapping(
-                        "$type",
-                        "{\"$type\": "
-                        + " {\"properties\": "
-                        + "     {\"grantee\": "
-                        + "         {   \"index\": \"not_analyzed\", "
-                        + "             \"term_vector\": \"with_positions_offsets\", "
-                        + "             \"type\": \"string\", "
-                        + "             \"analyzer\": \"snowball\", "
-                        + "             \"boost\": 1.0, "
-                        + "             \"store\": true}}}}"));
-        indexRandom(true,
-                client().prepareIndex(
-                        "$index",
-                        "$type",
-                        "data.activity.5").setSource("{\"django_ct\": \"data.activity\", \"grantee\": \"Grantee 1\"}"),
-                client().prepareIndex(
-                        "$index",
-                        "$type",
-                        "data.activity.6").setSource("{\"django_ct\": \"data.activity\", \"grantee\": \"Grantee 2\"}"));
-        ensureYellow();
-        SearchResponse searchResponse = client().prepareSearch()
-                .setQuery(matchAllQuery())
-                .addSort("grantee", SortOrder.ASC)
-                .execute().actionGet();
-        assertOrderedSearchHits(searchResponse, "data.activity.5", "data.activity.6");
-        searchResponse = client().prepareSearch()
-                .setQuery(matchAllQuery())
-                .addSort("grantee", SortOrder.DESC)
-                .execute().actionGet();
-        assertOrderedSearchHits(searchResponse, "data.activity.6", "data.activity.5");
-    }
-
     public void testTrackScores() throws Exception {
-        createIndex("test");
+        assertAcked(client().admin().indices().prepareCreate("test")
+                .addMapping("type", "svalue", "type=keyword").get());
         ensureGreen();
         index("test", "type1", jsonBuilder().startObject()
                 .field("id", "1")
@@ -256,7 +219,7 @@ public class FieldSortIT extends ESIntegTestCase {
     }
 
     public void testRandomSorting() throws IOException, InterruptedException, ExecutionException {
-        Random random = getRandom();
+        Random random = random();
         assertAcked(prepareCreate("test")
                 .addMapping("type",
                         XContentFactory.jsonBuilder()
@@ -330,7 +293,8 @@ public class FieldSortIT extends ESIntegTestCase {
     }
 
     public void test3078() {
-        createIndex("test");
+        assertAcked(client().admin().indices().prepareCreate("test")
+                .addMapping("type", "field", "type=keyword").get());
         ensureGreen();
 
         for (int i = 1; i < 101; i++) {
@@ -459,7 +423,8 @@ public class FieldSortIT extends ESIntegTestCase {
     }
 
     public void testIssue2986() {
-        createIndex("test");
+        assertAcked(client().admin().indices().prepareCreate("test")
+                .addMapping("type", "field1", "type=keyword").get());
 
         client().prepareIndex("test", "post", "1").setSource("{\"field1\":\"value1\"}").execute().actionGet();
         client().prepareIndex("test", "post", "2").setSource("{\"field1\":\"value2\"}").execute().actionGet();
@@ -480,7 +445,8 @@ public class FieldSortIT extends ESIntegTestCase {
             } catch (Exception e) {
                 // ignore
             }
-            createIndex("test");
+            assertAcked(client().admin().indices().prepareCreate("test")
+                    .addMapping("type", "tag", "type=keyword").get());
             ensureGreen();
             client().prepareIndex("test", "type", "1").setSource("tag", "alpha").execute().actionGet();
             refresh();
@@ -515,18 +481,11 @@ public class FieldSortIT extends ESIntegTestCase {
         assertAcked(prepareCreate("test")
 .addMapping("type1",
                 XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("properties").startObject("str_value")
-                        .field("type", "keyword").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("boolean_value")
-                        .field("type", "boolean").endObject().startObject("byte_value").field("type", "byte").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("short_value")
-                        .field("type", "short").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().startObject("integer_value").field("type", "integer").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("long_value")
-                        .field("type", "long").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().startObject("float_value").field("type", "float").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("double_value")
-                        .field("type", "double").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().endObject().endObject().endObject()));
+                        .field("type", "keyword").endObject().startObject("boolean_value").field("type", "boolean").endObject()
+                        .startObject("byte_value").field("type", "byte").endObject().startObject("short_value").field("type", "short")
+                        .endObject().startObject("integer_value").field("type", "integer").endObject().startObject("long_value")
+                        .field("type", "long").endObject().startObject("float_value").field("type", "float").endObject()
+                        .startObject("double_value").field("type", "double").endObject().endObject().endObject().endObject()));
         ensureGreen();
         List<IndexRequestBuilder> builders = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
@@ -750,11 +709,9 @@ public class FieldSortIT extends ESIntegTestCase {
                         .startObject("properties")
                             .startObject("i_value")
                                 .field("type", "integer")
-                                .startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null).endObject()
                             .endObject()
                             .startObject("d_value")
                                 .field("type", "float")
-                                .startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null).endObject()
                             .endObject()
                         .endObject()
                         .endObject()
@@ -928,7 +885,7 @@ public class FieldSortIT extends ESIntegTestCase {
 
         SearchResponse searchResponse = client().prepareSearch()
                 .setQuery(matchAllQuery())
-                .addSort(SortBuilders.fieldSort("kkk").unmappedType("string"))
+                .addSort(SortBuilders.fieldSort("kkk").unmappedType("keyword"))
                 .execute().actionGet();
         assertNoFailures(searchResponse);
     }
@@ -937,17 +894,11 @@ public class FieldSortIT extends ESIntegTestCase {
         assertAcked(prepareCreate("test")
 .addMapping("type1",
                 XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("properties").startObject("long_values")
-                        .field("type", "long").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().startObject("int_values").field("type", "integer").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("short_values")
-                        .field("type", "short").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().startObject("byte_values").field("type", "byte").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("float_values")
-                        .field("type", "float").startObject("fielddata").field("format", random().nextBoolean() ? "doc_values" : null)
-                        .endObject().endObject().startObject("double_values").field("type", "double").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().startObject("string_values")
-                        .field("type", "keyword").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().endObject().endObject()
+                        .field("type", "long").endObject().startObject("int_values").field("type", "integer").endObject()
+                        .startObject("short_values").field("type", "short").endObject().startObject("byte_values")
+                        .field("type", "byte").endObject().startObject("float_values").field("type", "float").endObject()
+                        .startObject("double_values").field("type", "double").endObject().startObject("string_values")
+                        .field("type", "keyword").endObject().endObject().endObject()
                         .endObject()));
         ensureGreen();
 
@@ -1020,7 +971,7 @@ public class FieldSortIT extends ESIntegTestCase {
         searchResponse = client().prepareSearch()
                 .setQuery(matchAllQuery())
                 .setSize(10)
-                .addSort(SortBuilders.fieldSort("long_values").order(SortOrder.DESC).sortMode("sum"))
+                .addSort(SortBuilders.fieldSort("long_values").order(SortOrder.DESC).sortMode(SortMode.SUM))
                 .execute().actionGet();
 
         assertThat(searchResponse.getHits().getTotalHits(), equalTo(3L));
@@ -1031,6 +982,42 @@ public class FieldSortIT extends ESIntegTestCase {
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
         assertThat(((Number) searchResponse.getHits().getAt(1).sortValues()[0]).longValue(), equalTo(24L));
+
+        assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
+        assertThat(((Number) searchResponse.getHits().getAt(2).sortValues()[0]).longValue(), equalTo(2L));
+
+        searchResponse = client().prepareSearch()
+                .setQuery(matchAllQuery())
+                .setSize(10)
+                .addSort(SortBuilders.fieldSort("long_values").order(SortOrder.DESC).sortMode(SortMode.AVG))
+                .execute().actionGet();
+
+        assertThat(searchResponse.getHits().getTotalHits(), equalTo(3L));
+        assertThat(searchResponse.getHits().hits().length, equalTo(3));
+
+        assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
+        assertThat(((Number) searchResponse.getHits().getAt(0).sortValues()[0]).longValue(), equalTo(13L));
+
+        assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
+        assertThat(((Number) searchResponse.getHits().getAt(1).sortValues()[0]).longValue(), equalTo(6L));
+
+        assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
+        assertThat(((Number) searchResponse.getHits().getAt(2).sortValues()[0]).longValue(), equalTo(1L));
+
+        searchResponse = client().prepareSearch()
+                .setQuery(matchAllQuery())
+                .setSize(10)
+                .addSort(SortBuilders.fieldSort("long_values").order(SortOrder.DESC).sortMode(SortMode.MEDIAN))
+                .execute().actionGet();
+
+        assertThat(searchResponse.getHits().getTotalHits(), equalTo(3L));
+        assertThat(searchResponse.getHits().hits().length, equalTo(3));
+
+        assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
+        assertThat(((Number) searchResponse.getHits().getAt(0).sortValues()[0]).longValue(), equalTo(13L));
+
+        assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
+        assertThat(((Number) searchResponse.getHits().getAt(1).sortValues()[0]).longValue(), equalTo(7L));
 
         assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
         assertThat(((Number) searchResponse.getHits().getAt(2).sortValues()[0]).longValue(), equalTo(2L));
@@ -1225,13 +1212,13 @@ public class FieldSortIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits().length, equalTo(3));
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(3)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("!4"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("!4"));
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(1).sortValues()[0]).string(), equalTo("01"));
+        assertThat(searchResponse.getHits().getAt(1).sortValues()[0], equalTo("01"));
 
         assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(2)));
-        assertThat(((Text) searchResponse.getHits().getAt(2).sortValues()[0]).string(), equalTo("07"));
+        assertThat(searchResponse.getHits().getAt(2).sortValues()[0], equalTo("07"));
 
         searchResponse = client().prepareSearch()
                 .setQuery(matchAllQuery())
@@ -1243,21 +1230,19 @@ public class FieldSortIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits().length, equalTo(3));
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("20"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("20"));
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(1).sortValues()[0]).string(), equalTo("10"));
+        assertThat(searchResponse.getHits().getAt(1).sortValues()[0], equalTo("10"));
 
         assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
-        assertThat(((Text) searchResponse.getHits().getAt(2).sortValues()[0]).string(), equalTo("03"));
+        assertThat(searchResponse.getHits().getAt(2).sortValues()[0], equalTo("03"));
     }
 
     public void testSortOnRareField() throws IOException {
         assertAcked(prepareCreate("test").addMapping("type1",
                 XContentFactory.jsonBuilder().startObject().startObject("type1").startObject("properties").startObject("string_values")
-                        .field("type", "keyword").startObject("fielddata")
-                        .field("format", random().nextBoolean() ? "doc_values" : null).endObject().endObject().endObject().endObject()
-                        .endObject()));
+                        .field("type", "keyword").endObject().endObject().endObject().endObject()));
         ensureGreen();
         client().prepareIndex("test", "type1", Integer.toString(1)).setSource(jsonBuilder().startObject()
                 .array("string_values", "01", "05", "10", "08")
@@ -1275,7 +1260,7 @@ public class FieldSortIT extends ESIntegTestCase {
 
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("10"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("10"));
 
         client().prepareIndex("test", "type1", Integer.toString(2)).setSource(jsonBuilder().startObject()
                 .array("string_values", "11", "15", "20", "07")
@@ -1296,10 +1281,10 @@ public class FieldSortIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits().length, equalTo(2));
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("20"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("20"));
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(1).sortValues()[0]).string(), equalTo("10"));
+        assertThat(searchResponse.getHits().getAt(1).sortValues()[0], equalTo("10"));
 
 
         client().prepareIndex("test", "type1", Integer.toString(3)).setSource(jsonBuilder().startObject()
@@ -1321,13 +1306,13 @@ public class FieldSortIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits().length, equalTo(3));
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("20"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("20"));
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(1).sortValues()[0]).string(), equalTo("10"));
+        assertThat(searchResponse.getHits().getAt(1).sortValues()[0], equalTo("10"));
 
         assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
-        assertThat(((Text) searchResponse.getHits().getAt(2).sortValues()[0]).string(), equalTo("03"));
+        assertThat(searchResponse.getHits().getAt(2).sortValues()[0], equalTo("03"));
 
         for (int i = 0; i < 15; i++) {
             client().prepareIndex("test", "type1", Integer.toString(300 + i)).setSource(jsonBuilder().startObject()
@@ -1345,13 +1330,13 @@ public class FieldSortIT extends ESIntegTestCase {
         assertThat(searchResponse.getHits().hits().length, equalTo(3));
 
         assertThat(searchResponse.getHits().getAt(0).id(), equalTo(Integer.toString(2)));
-        assertThat(((Text) searchResponse.getHits().getAt(0).sortValues()[0]).string(), equalTo("20"));
+        assertThat(searchResponse.getHits().getAt(0).sortValues()[0], equalTo("20"));
 
         assertThat(searchResponse.getHits().getAt(1).id(), equalTo(Integer.toString(1)));
-        assertThat(((Text) searchResponse.getHits().getAt(1).sortValues()[0]).string(), equalTo("10"));
+        assertThat(searchResponse.getHits().getAt(1).sortValues()[0], equalTo("10"));
 
         assertThat(searchResponse.getHits().getAt(2).id(), equalTo(Integer.toString(3)));
-        assertThat(((Text) searchResponse.getHits().getAt(2).sortValues()[0]).string(), equalTo("03"));
+        assertThat(searchResponse.getHits().getAt(2).sortValues()[0], equalTo("03"));
     }
 
     public void testSortMetaField() throws Exception {
@@ -1417,7 +1402,7 @@ public class FieldSortIT extends ESIntegTestCase {
     }
 
     /**
-     * Test case for issue 6150: https://github.com/elasticsearch/elasticsearch/issues/6150
+     * Test case for issue 6150: https://github.com/elastic/elasticsearch/issues/6150
      */
     public void testNestedSort() throws IOException, InterruptedException, ExecutionException {
         assertAcked(prepareCreate("test")
@@ -1431,6 +1416,7 @@ public class FieldSortIT extends ESIntegTestCase {
                                                 .startObject("properties")
                                                     .startObject("foo")
                                                         .field("type", "text")
+                                                        .field("fielddata", true)
                                                         .startObject("fields")
                                                             .startObject("sub")
                                                                 .field("type", "keyword")
@@ -1460,10 +1446,7 @@ public class FieldSortIT extends ESIntegTestCase {
         SearchHit[] hits = searchResponse.getHits().hits();
         for (int i = 0; i < hits.length; ++i) {
             assertThat(hits[i].getSortValues().length, is(1));
-            Object o = hits[i].getSortValues()[0];
-            assertThat(o, notNullValue());
-            Text text = (Text) o;
-            assertThat(text.string(), is("bar"));
+            assertThat(hits[i].getSortValues()[0], is("bar"));
         }
 
 
@@ -1476,10 +1459,7 @@ public class FieldSortIT extends ESIntegTestCase {
         hits = searchResponse.getHits().hits();
         for (int i = 0; i < hits.length; ++i) {
             assertThat(hits[i].getSortValues().length, is(1));
-            Object o = hits[i].getSortValues()[0];
-            assertThat(o, notNullValue());
-            Text text = (Text) o;
-            assertThat(text.string(), is("bar bar"));
+            assertThat(hits[i].getSortValues()[0], is("bar bar"));
         }
     }
 
@@ -1518,4 +1498,34 @@ public class FieldSortIT extends ESIntegTestCase {
         }
     }
 
+    public void testCustomFormat() throws Exception {
+        // Use an ip field, which uses different internal/external
+        // representations of values, to make sure values are both correctly
+        // rendered and parsed (search_after)
+        assertAcked(prepareCreate("test")
+                .addMapping("type", "ip", "type=ip"));
+        indexRandom(true,
+                client().prepareIndex("test", "type", "1").setSource("ip", "192.168.1.7"),
+                client().prepareIndex("test", "type", "2").setSource("ip", "2001:db8::ff00:42:8329"));
+
+        SearchResponse response = client().prepareSearch("test")
+                .addSort(SortBuilders.fieldSort("ip"))
+                .get();
+        assertSearchResponse(response);
+        assertEquals(2, response.getHits().totalHits());
+        assertArrayEquals(new String[] {"192.168.1.7"},
+                response.getHits().getAt(0).getSortValues());
+        assertArrayEquals(new String[] {"2001:db8::ff00:42:8329"},
+                response.getHits().getAt(1).getSortValues());
+
+        response = client().prepareSearch("test")
+                .addSort(SortBuilders.fieldSort("ip"))
+                .searchAfter(new Object[] {"192.168.1.7"})
+                .get();
+        assertSearchResponse(response);
+        assertEquals(2, response.getHits().totalHits());
+        assertEquals(1, response.getHits().hits().length);
+        assertArrayEquals(new String[] {"2001:db8::ff00:42:8329"},
+                response.getHits().getAt(0).getSortValues());
+    }
 }

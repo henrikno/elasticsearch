@@ -24,38 +24,29 @@ import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.StringHelper;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
+import org.elasticsearch.cli.Terminal;
 import org.elasticsearch.common.PidFile;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.SuppressForbidden;
-import org.elasticsearch.common.cli.CliTool;
-import org.elasticsearch.common.cli.Terminal;
 import org.elasticsearch.common.inject.CreationException;
-import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.logging.ESLogger;
+import org.elasticsearch.common.logging.LogConfigurator;
 import org.elasticsearch.common.logging.Loggers;
-import org.elasticsearch.common.logging.log4j.LogConfigurator;
-import org.elasticsearch.common.network.NetworkService;
-import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.transport.BoundTransportAddress;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.monitor.os.OsProbe;
 import org.elasticsearch.monitor.process.ProcessProbe;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.internal.InternalSettingsPreparer;
-import org.elasticsearch.transport.TransportSettings;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-
-import static org.elasticsearch.common.settings.Settings.Builder.EMPTY_SETTINGS;
 
 /**
  * Internal startup code.
@@ -95,11 +86,7 @@ final class Bootstrap {
 
         // check if the user is running as root, and bail
         if (Natives.definitelyRunningAsRoot()) {
-            if (Boolean.parseBoolean(System.getProperty("es.insecure.allow.root"))) {
-                logger.warn("running as ROOT user. this is a bad idea!");
-            } else {
-                throw new RuntimeException("don't run elasticsearch as root.");
-            }
+            throw new RuntimeException("can not run elasticsearch as root");
         }
 
         // enable secure computing mode
@@ -142,6 +129,9 @@ final class Bootstrap {
             // we've already logged this.
         }
 
+        Natives.trySetMaxNumberOfThreads();
+        Natives.trySetMaxSizeVirtualMemory();
+
         // init lucene random seed. it will use /dev/urandom where available:
         StringHelper.randomId();
     }
@@ -156,7 +146,7 @@ final class Bootstrap {
     private void setup(boolean addShutdownHook, Settings settings, Environment environment) throws Exception {
         initializeNatives(
                 environment.tmpFile(),
-                BootstrapSettings.MLOCKALL_SETTING.get(settings),
+                BootstrapSettings.MEMORY_LOCK_SETTING.get(settings),
                 BootstrapSettings.SECCOMP_SETTING.get(settings),
                 BootstrapSettings.CTRLHANDLER_SETTING.get(settings));
 
@@ -182,36 +172,21 @@ final class Bootstrap {
         // install SM after natives, shutdown hooks, etc.
         Security.configure(environment, BootstrapSettings.SECURITY_FILTER_BAD_DEFAULTS_SETTING.get(settings));
 
-        // We do not need to reload system properties here as we have already applied them in building the settings and
-        // reloading could cause multiple prompts to the user for values if a system property was specified with a prompt
-        // placeholder
-        Settings nodeSettings = Settings.settingsBuilder()
-                .put(settings)
-                .put(InternalSettingsPreparer.IGNORE_SYSTEM_PROPERTIES_SETTING.getKey(), true)
-                .build();
-        enforceOrLogLimits(nodeSettings);
-
-        node = new Node(nodeSettings);
+        node = new Node(settings) {
+            @Override
+            protected void validateNodeBeforeAcceptingRequests(Settings settings, BoundTransportAddress boundTransportAddress) {
+                BootstrapCheck.check(settings, boundTransportAddress);
+            }
+        };
     }
 
-    @SuppressForbidden(reason = "Exception#printStackTrace()")
-    private static void setupLogging(Settings settings) {
-        try {
-            Class.forName("org.apache.log4j.Logger");
-            LogConfigurator.configure(settings, true);
-        } catch (ClassNotFoundException e) {
-            // no log4j
-        } catch (NoClassDefFoundError e) {
-            // no log4j
-        } catch (Exception e) {
-            sysError("Failed to configure logging...", false);
-            e.printStackTrace();
-        }
-    }
-
-    private static Environment initialSettings(boolean foreground) {
+    private static Environment initialSettings(boolean foreground, String pidFile, Map<String, String> esSettings) {
         Terminal terminal = foreground ? Terminal.DEFAULT : null;
-        return InternalSettingsPreparer.prepareEnvironment(EMPTY_SETTINGS, terminal);
+        Settings.Builder builder = Settings.builder();
+        if (Strings.hasLength(pidFile)) {
+            builder.put(Environment.PIDFILE_SETTING.getKey(), pidFile);
+        }
+        return InternalSettingsPreparer.prepareEnvironment(builder.build(), terminal, esSettings);
     }
 
     private void start() {
@@ -238,34 +213,26 @@ final class Bootstrap {
      * This method is invoked by {@link Elasticsearch#main(String[])}
      * to startup elasticsearch.
      */
-    static void init(String[] args) throws Throwable {
+    static void init(
+            final boolean foreground,
+            final String pidFile,
+            final Map<String, String> esSettings) throws Throwable {
         // Set the system property before anything has a chance to trigger its use
         initLoggerPrefix();
 
-        BootstrapCLIParser bootstrapCLIParser = new BootstrapCLIParser();
-        CliTool.ExitStatus status = bootstrapCLIParser.execute(args);
-
-        if (CliTool.ExitStatus.OK != status) {
-            exit(status.status());
-        }
+        // force the class initializer for BootstrapInfo to run before
+        // the security manager is installed
+        BootstrapInfo.init();
 
         INSTANCE = new Bootstrap();
 
-        boolean foreground = !"false".equals(System.getProperty("es.foreground", System.getProperty("es-foreground")));
-
-        Environment environment = initialSettings(foreground);
+        Environment environment = initialSettings(foreground, pidFile, esSettings);
         Settings settings = environment.settings();
-        setupLogging(settings);
+        LogConfigurator.configure(settings, true);
         checkForCustomConfFile();
 
         if (environment.pidFile() != null) {
             PidFile.create(environment.pidFile(), true);
-        }
-
-        // warn if running using the client VM
-        if (JvmInfo.jvmInfo().getVmName().toLowerCase(Locale.ROOT).contains("client")) {
-            ESLogger logger = Loggers.getLogger(Bootstrap.class);
-            logger.warn("jvm uses the client vm, make sure to run `java` with the server vm for best performance by adding `-server` to the command line");
         }
 
         try {
@@ -327,14 +294,6 @@ final class Bootstrap {
         System.err.close();
     }
 
-    @SuppressForbidden(reason = "System#err")
-    private static void sysError(String line, boolean flush) {
-        System.err.println(line);
-        if (flush) {
-            System.err.flush();
-        }
-    }
-
     private static void checkForCustomConfFile() {
         String confFileSetting = System.getProperty("es.default.config");
         checkUnsetAndMaybeExit(confFileSetting, "es.default.config");
@@ -364,47 +323,4 @@ final class Bootstrap {
         }
     }
 
-    static final Set<Setting> ENFORCE_SETTINGS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-        TransportSettings.BIND_HOST,
-        TransportSettings.HOST,
-        TransportSettings.PUBLISH_HOST,
-        NetworkService.GLOBAL_NETWORK_HOST_SETTING,
-        NetworkService.GLOBAL_NETWORK_BINDHOST_SETTING,
-        NetworkService.GLOBAL_NETWORK_PUBLISHHOST_SETTING
-    )));
-
-    private static boolean enforceLimits(Settings settings) {
-        for (Setting setting : ENFORCE_SETTINGS) {
-            if (setting.exists(settings)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static void enforceOrLogLimits(Settings settings) { // pkg private for testing
-        /* We enforce limits once any network host is configured. In this case we assume the node is running in production
-         * and all production limit checks must pass. This should be extended as we go to settings like:
-         *   - discovery.zen.minimum_master_nodes
-         *   - discovery.zen.ping.unicast.hosts is set if we use zen disco
-         *   - ensure we can write in all data directories
-         *   - fail if mlockall failed and was configured
-         *   - fail if vm.max_map_count is under a certain limit (not sure if this works cross platform)
-         *   - fail if the default cluster.name is used, if this is setup on network a real clustername should be used?*/
-        final boolean enforceLimits = enforceLimits(settings);
-        final ESLogger logger = Loggers.getLogger(Bootstrap.class);
-        final long maxFileDescriptorCount = ProcessProbe.getInstance().getMaxFileDescriptorCount();
-        if (maxFileDescriptorCount != -1) {
-            final int fileDescriptorCountThreshold = (1 << 16);
-            if (maxFileDescriptorCount < fileDescriptorCountThreshold) {
-                if (enforceLimits){
-                    throw new IllegalStateException("max file descriptors [" + maxFileDescriptorCount
-                        + "] for elasticsearch process likely too low, increase it to at least [" + fileDescriptorCountThreshold +"]");
-                }
-                logger.warn(
-                    "max file descriptors [{}] for elasticsearch process likely too low, consider increasing to at least [{}]",
-                    maxFileDescriptorCount, fileDescriptorCountThreshold);
-            }
-        }
-    }
 }

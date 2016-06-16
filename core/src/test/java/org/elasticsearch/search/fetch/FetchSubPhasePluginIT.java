@@ -27,6 +27,7 @@ import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.termvectors.TermVectorsRequest;
 import org.elasticsearch.action.termvectors.TermVectorsResponse;
 import org.elasticsearch.common.Priority;
+import org.elasticsearch.common.logging.ESLoggerFactory;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.termvectors.TermVectorsService;
@@ -57,7 +58,7 @@ import static org.hamcrest.CoreMatchers.equalTo;
 /**
  *
  */
-@ClusterScope(scope = Scope.SUITE, numDataNodes = 1)
+@ClusterScope(scope = Scope.SUITE, supportsDedicatedMasters = false, numDataNodes = 1)
 public class FetchSubPhasePluginIT extends ESIntegTestCase {
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
@@ -111,11 +112,11 @@ public class FetchSubPhasePluginIT extends ESIntegTestCase {
         }
 
         public void onModule(SearchModule searchModule) {
-            searchModule.registerFetchSubPhase(TermVectorsFetchSubPhase.class);
+            searchModule.registerFetchSubPhase(new TermVectorsFetchSubPhase());
         }
     }
 
-    public static class TermVectorsFetchSubPhase implements FetchSubPhase {
+    public final static class TermVectorsFetchSubPhase implements FetchSubPhase {
 
         public static final ContextFactory<TermVectorsFetchContext> CONTEXT_FACTORY = new ContextFactory<TermVectorsFetchContext>() {
 
@@ -138,21 +139,10 @@ public class FetchSubPhasePluginIT extends ESIntegTestCase {
         }
 
         @Override
-        public boolean hitsExecutionNeeded(SearchContext context) {
-            return false;
-        }
-
-        @Override
-        public void hitsExecute(SearchContext context, InternalSearchHit[] hits) {
-        }
-
-        @Override
-        public boolean hitExecutionNeeded(SearchContext context) {
-            return context.getFetchSubPhaseContext(CONTEXT_FACTORY).hitExecutionNeeded();
-        }
-
-        @Override
         public void hitExecute(SearchContext context, HitContext hitContext) {
+            if (context.getFetchSubPhaseContext(CONTEXT_FACTORY).hitExecutionNeeded() == false) {
+                return;
+            }
             String field = context.getFetchSubPhaseContext(CONTEXT_FACTORY).getField();
 
             if (hitContext.hit().fieldsOrNull() == null) {
@@ -173,7 +163,7 @@ public class FetchSubPhasePluginIT extends ESIntegTestCase {
                 }
                 hitField.values().add(tv);
             } catch (IOException e) {
-                e.printStackTrace();
+                ESLoggerFactory.getLogger(FetchSubPhasePluginIT.class.getName()).info("Swallowed exception", e);
             }
         }
     }
@@ -181,7 +171,8 @@ public class FetchSubPhasePluginIT extends ESIntegTestCase {
     public static class TermVectorsFetchParseElement extends FetchSubPhaseParseElement<TermVectorsFetchContext> {
 
         @Override
-        protected void innerParse(XContentParser parser, TermVectorsFetchContext termVectorsFetchContext, SearchContext searchContext) throws Exception {
+        protected void innerParse(XContentParser parser, TermVectorsFetchContext termVectorsFetchContext, SearchContext searchContext)
+                throws Exception {
             XContentParser.Token token = parser.currentToken();
             if (token == XContentParser.Token.VALUE_STRING) {
                 String fieldName = parser.text();

@@ -21,7 +21,6 @@ package org.elasticsearch.index.mapper;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
-import org.elasticsearch.index.fielddata.FieldDataType;
 import org.elasticsearch.index.similarity.BM25SimilarityProvider;
 import org.elasticsearch.test.ESTestCase;
 
@@ -130,16 +129,10 @@ public abstract class FieldTypeTestCase extends ESTestCase {
                 other.setSimilarity(new BM25SimilarityProvider("bar", Settings.EMPTY));
             }
         },
-        new Modifier("norms.loading", true) {
+        new Modifier("eager_global_ordinals", true) {
             @Override
             public void modify(MappedFieldType ft) {
-                ft.setNormsLoading(MappedFieldType.Loading.LAZY);
-            }
-        },
-        new Modifier("fielddata", true) {
-            @Override
-            public void modify(MappedFieldType ft) {
-                ft.setFieldDataType(new FieldDataType("foo", Settings.builder().put("loading", "eager").build()));
+                ft.setEagerGlobalOrdinals(ft.eagerGlobalOrdinals() == false);
             }
         },
         new Modifier("null_value", true) {
@@ -217,8 +210,7 @@ public abstract class FieldTypeTestCase extends ESTestCase {
             ", searchAnalyzer=" + ft.searchAnalyzer() +
             ", searchQuoteAnalyzer=" + ft.searchQuoteAnalyzer() +
             ", similarity=" + ft.similarity() +
-            ", normsLoading=" + ft.normsLoading() +
-            ", fieldDataType=" + ft.fieldDataType() +
+            ", eagerGlobalOrdinals=" + ft.eagerGlobalOrdinals() +
             ", nullValue=" + ft.nullValue() +
             ", nullValueAsString='" + ft.nullValueAsString() + "'" +
             "} " + super.toString();
@@ -281,7 +273,7 @@ public abstract class FieldTypeTestCase extends ESTestCase {
         fieldType.checkCompatibility(fieldType, conflicts, random().nextBoolean()); // no exception
         assertTrue(conflicts.toString(), conflicts.isEmpty());
 
-        MappedFieldType bogus = new MappedFieldType() {
+        MappedFieldType bogus = new TermBasedFieldType() {
             @Override
             public MappedFieldType clone() {return null;}
             @Override
@@ -295,7 +287,7 @@ public abstract class FieldTypeTestCase extends ESTestCase {
         }
         assertTrue(conflicts.toString(), conflicts.isEmpty());
 
-        MappedFieldType other = new MappedFieldType() {
+        MappedFieldType other = new TermBasedFieldType() {
             @Override
             public MappedFieldType clone() {return null;}
             @Override

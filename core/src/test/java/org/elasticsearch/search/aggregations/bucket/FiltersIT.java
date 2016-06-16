@@ -22,10 +22,17 @@ package org.elasticsearch.search.aggregations.bucket;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryParseContext;
+import org.elasticsearch.indices.query.IndicesQueriesRegistry;
+import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.filters.Filters;
+import org.elasticsearch.search.aggregations.bucket.filters.FiltersAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.filters.FiltersAggregator.KeyedFilter;
 import org.elasticsearch.search.aggregations.bucket.histogram.Histogram;
 import org.elasticsearch.search.aggregations.metrics.avg.Avg;
@@ -33,7 +40,9 @@ import org.elasticsearch.test.ESIntegTestCase;
 import org.hamcrest.Matchers;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -111,7 +120,8 @@ public class FiltersIT extends ESIntegTestCase {
 
     public void testSimple() throws Exception {
         SearchResponse response = client().prepareSearch("idx").addAggregation(
-                filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")), new KeyedFilter("tag2", termQuery("tag", "tag2"))))
+                filters("tags", randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                        new KeyedFilter("tag2", termQuery("tag", "tag2")))))
                 .execute().actionGet();
 
         assertSearchResponse(response);
@@ -132,11 +142,12 @@ public class FiltersIT extends ESIntegTestCase {
     }
 
     // See NullPointer issue when filters are empty:
-    // https://github.com/elasticsearch/elasticsearch/issues/8438
+    // https://github.com/elastic/elasticsearch/issues/8438
     public void testEmptyFilterDeclarations() throws Exception {
-        QueryBuilder<?> emptyFilter = new BoolQueryBuilder();
+        QueryBuilder emptyFilter = new BoolQueryBuilder();
         SearchResponse response = client().prepareSearch("idx")
-                .addAggregation(filters("tags", new KeyedFilter("all", emptyFilter), new KeyedFilter("tag1", termQuery("tag", "tag1"))))
+                .addAggregation(filters("tags", randomOrder(new KeyedFilter("all", emptyFilter),
+                        new KeyedFilter("tag1", termQuery("tag", "tag1")))))
                 .execute().actionGet();
 
         assertSearchResponse(response);
@@ -153,8 +164,8 @@ public class FiltersIT extends ESIntegTestCase {
 
     public void testWithSubAggregation() throws Exception {
         SearchResponse response = client().prepareSearch("idx")
-                .addAggregation(filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")),
-                        new KeyedFilter("tag2", termQuery("tag", "tag2"))).subAggregation(avg("avg_value").field("value")))
+                .addAggregation(filters("tags", randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                        new KeyedFilter("tag2", termQuery("tag", "tag2")))).subAggregation(avg("avg_value").field("value")))
                 .execute().actionGet();
 
         assertSearchResponse(response);
@@ -201,6 +212,42 @@ public class FiltersIT extends ESIntegTestCase {
         assertThat((double) propertiesCounts[1], equalTo((double) sum / numTag2Docs));
     }
 
+    public void testEmptyFilter() throws Exception {
+        String emtpyFilterBody = "{ \"filters\" : [ {} ] }";
+        XContentParser parser = XContentFactory.xContent(emtpyFilterBody).createParser(emtpyFilterBody);
+        parser.nextToken();
+        QueryParseContext parseContext = new QueryParseContext(new IndicesQueriesRegistry(), parser, ParseFieldMatcher.EMPTY);
+        AggregationBuilder filtersAgg = FiltersAggregationBuilder.parse("tag1", parseContext);
+
+        SearchResponse response = client().prepareSearch("idx").addAggregation(filtersAgg).execute().actionGet();
+
+        assertSearchResponse(response);
+
+        Filters filter = response.getAggregations().get("tag1");
+        assertThat(filter, notNullValue());
+        assertThat(filter.getBuckets().size(), equalTo(1));
+        assertThat(filter.getBuckets().get(0).getDocCount(), equalTo((long) numDocs));
+    }
+
+    public void testEmptyKeyedFilter() throws Exception {
+        String emtpyFilterBody = "{ \"filters\" : {\"foo\" : {} } }";
+        XContentParser parser = XContentFactory.xContent(emtpyFilterBody).createParser(emtpyFilterBody);
+        parser.nextToken();
+        QueryParseContext parseContext = new QueryParseContext(new IndicesQueriesRegistry(), parser, ParseFieldMatcher.EMPTY);
+        AggregationBuilder filtersAgg = FiltersAggregationBuilder.parse("tag1", parseContext);
+
+        SearchResponse response = client().prepareSearch("idx").addAggregation(filtersAgg)
+                .execute().actionGet();
+
+        assertSearchResponse(response);
+
+        Filters filter = response.getAggregations().get("tag1");
+        assertThat(filter, notNullValue());
+        assertThat(filter.getBuckets().size(), equalTo(1));
+        assertThat(filter.getBuckets().get(0).getKey(), equalTo("foo"));
+        assertThat(filter.getBuckets().get(0).getDocCount(), equalTo((long) numDocs));
+    }
+
     public void testAsSubAggregation() {
         SearchResponse response = client().prepareSearch("idx")
                 .addAggregation(
@@ -227,9 +274,9 @@ public class FiltersIT extends ESIntegTestCase {
         try {
             client().prepareSearch("idx")
                     .addAggregation(
-                    filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")), new KeyedFilter("tag2", termQuery("tag", "tag2")))
-                                    .subAggregation(avg("avg_value"))
-                    )
+                            filters("tags",
+                            randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                                    new KeyedFilter("tag2", termQuery("tag", "tag2")))).subAggregation(avg("avg_value")))
                     .execute().actionGet();
 
             fail("expected execution to fail - an attempt to have a context based numeric sub-aggregation, but there is not value source" +
@@ -287,8 +334,8 @@ public class FiltersIT extends ESIntegTestCase {
 
     public void testOtherBucket() throws Exception {
         SearchResponse response = client().prepareSearch("idx").addAggregation(
-                filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")), new KeyedFilter("tag2", termQuery("tag", "tag2")))
-                        .otherBucket(true))
+                filters("tags", randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                        new KeyedFilter("tag2", termQuery("tag", "tag2")))).otherBucket(true))
                 .execute().actionGet();
 
         assertSearchResponse(response);
@@ -314,8 +361,8 @@ public class FiltersIT extends ESIntegTestCase {
 
     public void testOtherNamedBucket() throws Exception {
         SearchResponse response = client().prepareSearch("idx")
-                .addAggregation(filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")),
-                        new KeyedFilter("tag2", termQuery("tag", "tag2"))).otherBucket(true).otherBucketKey("foobar"))
+                .addAggregation(filters("tags", randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                        new KeyedFilter("tag2", termQuery("tag", "tag2")))).otherBucket(true).otherBucketKey("foobar"))
                 .execute().actionGet();
 
         assertSearchResponse(response);
@@ -370,8 +417,8 @@ public class FiltersIT extends ESIntegTestCase {
 
     public void testOtherWithSubAggregation() throws Exception {
         SearchResponse response = client().prepareSearch("idx")
-                .addAggregation(filters("tags", new KeyedFilter("tag1", termQuery("tag", "tag1")),
-                        new KeyedFilter("tag2", termQuery("tag", "tag2"))).otherBucket(true)
+                .addAggregation(filters("tags", randomOrder(new KeyedFilter("tag1", termQuery("tag", "tag1")),
+                        new KeyedFilter("tag2", termQuery("tag", "tag2")))).otherBucket(true)
                                 .subAggregation(avg("avg_value").field("value")))
                 .execute().actionGet();
 
@@ -435,4 +482,31 @@ public class FiltersIT extends ESIntegTestCase {
         assertThat((double) propertiesCounts[2], equalTo((double) sum / numOtherDocs));
     }
 
+    public void testEmptyAggregationWithOtherBucket() throws Exception {
+        SearchResponse searchResponse = client().prepareSearch("empty_bucket_idx")
+                .setQuery(matchAllQuery())
+                .addAggregation(histogram("histo").field("value").interval(1L).minDocCount(0)
+                        .subAggregation(filters("filters", new KeyedFilter("foo", matchAllQuery()))
+                            .otherBucket(true).otherBucketKey("bar")))
+                .execute().actionGet();
+
+        assertThat(searchResponse.getHits().getTotalHits(), equalTo(2L));
+        Histogram histo = searchResponse.getAggregations().get("histo");
+        assertThat(histo, Matchers.notNullValue());
+        Histogram.Bucket bucket = histo.getBuckets().get(1);
+        assertThat(bucket, Matchers.notNullValue());
+
+        Filters filters = bucket.getAggregations().get("filters");
+        assertThat(filters, notNullValue());
+
+        Filters.Bucket other = filters.getBucketByKey("bar");
+        assertThat(other, Matchers.notNullValue());
+        assertThat(other.getKeyAsString(), equalTo("bar"));
+        assertThat(other.getDocCount(), is(0L));
+    }
+
+    private static KeyedFilter[] randomOrder(KeyedFilter... filters) {
+        Collections.shuffle(Arrays.asList(filters), random());
+        return filters;
+    }
 }

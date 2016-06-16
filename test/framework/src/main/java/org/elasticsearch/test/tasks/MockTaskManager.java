@@ -20,6 +20,7 @@
 package org.elasticsearch.test.tasks;
 
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskManager;
@@ -33,7 +34,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class MockTaskManager extends TaskManager {
 
-    public static final Setting<Boolean> USE_MOCK_TASK_MANAGER_SETTING = Setting.boolSetting("tests.mock.taskmanager.enabled", false, false, Setting.Scope.CLUSTER);
+    public static final Setting<Boolean> USE_MOCK_TASK_MANAGER_SETTING =
+        Setting.boolSetting("tests.mock.taskmanager.enabled", false, Property.NodeScope);
 
     private final Collection<MockTaskManagerListener> listeners = new CopyOnWriteArrayList<>();
 
@@ -71,6 +73,18 @@ public class MockTaskManager extends TaskManager {
             logger.warn("trying to remove the same with id {} twice", task.getId());
         }
         return removedTask;
+    }
+
+    @Override
+    public void waitForTaskCompletion(Task task, long untilInNanos) {
+        for (MockTaskManagerListener listener : listeners) {
+            try {
+                listener.waitForTaskCompletion(task);
+            } catch (Throwable t) {
+                logger.warn("failed to notify task manager listener about waitForTaskCompletion the task with id {}", t, task.getId());
+            }
+        }
+        super.waitForTaskCompletion(task, untilInNanos);
     }
 
     public void addListener(MockTaskManagerListener listener) {

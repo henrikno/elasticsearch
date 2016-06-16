@@ -37,8 +37,14 @@ import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.settings.SettingsModule;
 import org.elasticsearch.index.IndexModule;
+import org.elasticsearch.script.NativeScriptFactory;
+import org.elasticsearch.script.ScriptContext;
+import org.elasticsearch.script.ScriptEngineService;
+import org.elasticsearch.threadpool.ExecutorBuilder;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -58,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.common.io.FileSystemUtils.isAccessibleDirectory;
 
@@ -71,9 +78,18 @@ public class PluginsService extends AbstractComponent {
      */
     private final List<Tuple<PluginInfo, Plugin>> plugins;
     private final PluginsAndModules info;
-    public static final Setting<List<String>> MANDATORY_SETTING = Setting.listSetting("plugin.mandatory", Collections.emptyList(), Function.identity(), false, Setting.Scope.CLUSTER);
+    public static final Setting<List<String>> MANDATORY_SETTING =
+        Setting.listSetting("plugin.mandatory", Collections.emptyList(), Function.identity(), Property.NodeScope);
 
     private final Map<Plugin, List<OnModuleReference>> onModuleReferences;
+
+    public List<Setting<?>> getPluginSettings() {
+        return plugins.stream().flatMap(p -> p.v2().getSettings().stream()).collect(Collectors.toList());
+    }
+
+    public List<String> getPluginSettingsFilter() {
+        return plugins.stream().flatMap(p -> p.v2().getSettingsFilter().stream()).collect(Collectors.toList());
+    }
 
     static class OnModuleReference {
         public final Class<? extends Module> moduleClass;
@@ -101,7 +117,7 @@ public class PluginsService extends AbstractComponent {
         // first we load plugins that are on the classpath. this is for tests and transport clients
         for (Class<? extends Plugin> pluginClass : classpathPlugins) {
             Plugin plugin = loadPlugin(pluginClass, settings);
-            PluginInfo pluginInfo = new PluginInfo(plugin.name(), plugin.description(), "NA", pluginClass.getName(), false);
+            PluginInfo pluginInfo = new PluginInfo(plugin.name(), plugin.description(), "NA", pluginClass.getName());
             if (logger.isTraceEnabled()) {
                 logger.trace("plugin loaded from classpath [{}]", pluginInfo);
             }
@@ -236,7 +252,7 @@ public class PluginsService extends AbstractComponent {
 
     public Settings updatedSettings() {
         Map<String, String> foundSettings = new HashMap<>();
-        final Settings.Builder builder = Settings.settingsBuilder();
+        final Settings.Builder builder = Settings.builder();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
             Settings settings = plugin.v2().additionalSettings();
             for (String setting : settings.getAsMap().keySet()) {
@@ -259,6 +275,14 @@ public class PluginsService extends AbstractComponent {
         return modules;
     }
 
+    public List<ExecutorBuilder<?>> getExecutorBuilders(Settings settings) {
+        final ArrayList<ExecutorBuilder<?>> builders = new ArrayList<>();
+        for (final Tuple<PluginInfo, Plugin> plugin : plugins) {
+            builders.addAll(plugin.v2().getExecutorBuilders(settings));
+        }
+        return builders;
+    }
+
     public Collection<Class<? extends LifecycleComponent>> nodeServices() {
         List<Class<? extends LifecycleComponent>> services = new ArrayList<>();
         for (Tuple<PluginInfo, Plugin> plugin : plugins) {
@@ -272,6 +296,7 @@ public class PluginsService extends AbstractComponent {
             plugin.v2().onIndexModule(indexModule);
         }
     }
+
     /**
      * Get information about plugins and modules
      */
@@ -300,9 +325,6 @@ public class PluginsService extends AbstractComponent {
                     continue; // skip over .DS_Store etc
                 }
                 PluginInfo info = PluginInfo.readFromProperties(module);
-                if (!info.isIsolated()) {
-                    throw new IllegalStateException("modules must be isolated: " + info);
-                }
                 Bundle bundle = new Bundle();
                 bundle.plugins.add(info);
                 // gather urls for jar files
@@ -327,8 +349,6 @@ public class PluginsService extends AbstractComponent {
         }
 
         List<Bundle> bundles = new ArrayList<>();
-        // a special purgatory for plugins that directly depend on each other
-        bundles.add(new Bundle());
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(pluginsDirectory)) {
             for (Path plugin : stream) {
@@ -352,13 +372,8 @@ public class PluginsService extends AbstractComponent {
                         urls.add(jar.toRealPath().toUri().toURL());
                     }
                 }
-                final Bundle bundle;
-                if (info.isIsolated() == false) {
-                    bundle = bundles.get(0); // purgatory
-                } else {
-                    bundle = new Bundle();
-                    bundles.add(bundle);
-                }
+                final Bundle bundle = new Bundle();
+                bundles.add(bundle);
                 bundle.plugins.add(info);
                 bundle.urls.addAll(urls);
             }
@@ -438,5 +453,10 @@ public class PluginsService extends AbstractComponent {
         } catch (Throwable e) {
             throw new ElasticsearchException("Failed to load plugin class [" + pluginClass.getName() + "]", e);
         }
+    }
+
+    public <T> List<T> filterPlugins(Class<T> type) {
+        return plugins.stream().filter(x -> type.isAssignableFrom(x.v2().getClass()))
+            .map(p -> ((T)p.v2())).collect(Collectors.toList());
     }
 }

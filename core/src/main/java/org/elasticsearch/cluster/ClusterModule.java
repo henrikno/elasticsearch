@@ -20,7 +20,6 @@
 package org.elasticsearch.cluster;
 
 import org.elasticsearch.cluster.action.index.MappingUpdatedAction;
-import org.elasticsearch.cluster.action.index.NodeIndexDeletedAction;
 import org.elasticsearch.cluster.action.index.NodeMappingRefreshAction;
 import org.elasticsearch.cluster.action.shard.ShardStateAction;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -33,6 +32,7 @@ import org.elasticsearch.cluster.metadata.MetaDataIndexTemplateService;
 import org.elasticsearch.cluster.metadata.MetaDataMappingService;
 import org.elasticsearch.cluster.metadata.MetaDataUpdateSettingsService;
 import org.elasticsearch.cluster.node.DiscoveryNodeService;
+import org.elasticsearch.cluster.routing.DelayedAllocationService;
 import org.elasticsearch.cluster.routing.OperationRouting;
 import org.elasticsearch.cluster.routing.RoutingService;
 import org.elasticsearch.cluster.routing.allocation.AllocationService;
@@ -49,18 +49,21 @@ import org.elasticsearch.cluster.routing.allocation.decider.FilterAllocationDeci
 import org.elasticsearch.cluster.routing.allocation.decider.NodeVersionAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.RebalanceOnlyWhenActiveAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.ReplicaAfterPrimaryActiveAllocationDecider;
+import org.elasticsearch.cluster.routing.allocation.decider.MaxRetryAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.SameShardAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.ShardsLimitAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.SnapshotInProgressAllocationDecider;
 import org.elasticsearch.cluster.routing.allocation.decider.ThrottlingAllocationDecider;
-import org.elasticsearch.cluster.service.InternalClusterService;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.ExtensionPoint;
 import org.elasticsearch.gateway.GatewayAllocator;
+import org.elasticsearch.tasks.TaskPersistenceService;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -74,9 +77,11 @@ public class ClusterModule extends AbstractModule {
 
     public static final String EVEN_SHARD_COUNT_ALLOCATOR = "even_shard";
     public static final String BALANCED_ALLOCATOR = "balanced"; // default
-    public static final Setting<String> SHARDS_ALLOCATOR_TYPE_SETTING = new Setting<>("cluster.routing.allocation.type", BALANCED_ALLOCATOR, Function.identity(), false, Setting.Scope.CLUSTER);
+    public static final Setting<String> SHARDS_ALLOCATOR_TYPE_SETTING =
+        new Setting<>("cluster.routing.allocation.type", BALANCED_ALLOCATOR, Function.identity(), Property.NodeScope);
     public static final List<Class<? extends AllocationDecider>> DEFAULT_ALLOCATION_DECIDERS =
         Collections.unmodifiableList(Arrays.asList(
+            MaxRetryAllocationDecider.class,
             SameShardAllocationDecider.class,
             FilterAllocationDecider.class,
             ReplicaAfterPrimaryActiveAllocationDecider.class,
@@ -135,7 +140,8 @@ public class ClusterModule extends AbstractModule {
         bind(GatewayAllocator.class).asEagerSingleton();
         bind(AllocationService.class).asEagerSingleton();
         bind(DiscoveryNodeService.class).asEagerSingleton();
-        bind(ClusterService.class).to(InternalClusterService.class).asEagerSingleton();
+        bind(ClusterService.class).asEagerSingleton();
+        bind(NodeConnectionsService.class).asEagerSingleton();
         bind(OperationRouting.class).asEagerSingleton();
         bind(MetaDataCreateIndexService.class).asEagerSingleton();
         bind(MetaDataDeleteIndexService.class).asEagerSingleton();
@@ -146,9 +152,10 @@ public class ClusterModule extends AbstractModule {
         bind(MetaDataIndexTemplateService.class).asEagerSingleton();
         bind(IndexNameExpressionResolver.class).asEagerSingleton();
         bind(RoutingService.class).asEagerSingleton();
+        bind(DelayedAllocationService.class).asEagerSingleton();
         bind(ShardStateAction.class).asEagerSingleton();
-        bind(NodeIndexDeletedAction.class).asEagerSingleton();
         bind(NodeMappingRefreshAction.class).asEagerSingleton();
         bind(MappingUpdatedAction.class).asEagerSingleton();
+        bind(TaskPersistenceService.class).asEagerSingleton();
     }
 }

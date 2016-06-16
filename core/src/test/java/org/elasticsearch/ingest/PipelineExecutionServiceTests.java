@@ -19,12 +19,14 @@
 
 package org.elasticsearch.ingest;
 
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.update.UpdateRequest;
+import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.ingest.core.CompoundProcessor;
 import org.elasticsearch.ingest.core.IngestDocument;
@@ -38,17 +40,20 @@ import org.mockito.ArgumentMatcher;
 import org.mockito.invocation.InvocationOnMock;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static org.hamcrest.Matchers.equalTo;
-import static org.mockito.Matchers.eq;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.argThat;
+import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -93,7 +98,8 @@ public class PipelineExecutionServiceTests extends ESTestCase {
 
         IndexRequest indexRequest1 = new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("_id");
         bulkRequest.add(indexRequest1);
-        IndexRequest indexRequest2 = new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("does_not_exist");
+        IndexRequest indexRequest2 =
+                new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("does_not_exist");
         bulkRequest.add(indexRequest2);
         @SuppressWarnings("unchecked")
         BiConsumer<IndexRequest, Throwable> failureHandler = mock(BiConsumer.class);
@@ -184,8 +190,11 @@ public class PipelineExecutionServiceTests extends ESTestCase {
 
     public void testExecuteSuccessWithOnFailure() throws Exception {
         Processor processor = mock(Processor.class);
+        when(processor.getType()).thenReturn("mock_processor_type");
+        when(processor.getTag()).thenReturn("mock_processor_tag");
         Processor onFailureProcessor = mock(Processor.class);
-        CompoundProcessor compoundProcessor = new CompoundProcessor(Collections.singletonList(processor), Collections.singletonList(new CompoundProcessor(onFailureProcessor)));
+        CompoundProcessor compoundProcessor = new CompoundProcessor(false, Collections.singletonList(processor),
+                Collections.singletonList(new CompoundProcessor(onFailureProcessor)));
         when(store.get("_id")).thenReturn(new Pipeline("_id", "_description", compoundProcessor));
         IndexRequest indexRequest = new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("_id");
         doThrow(new RuntimeException()).when(processor).execute(eqID("_index", "_type", "_id", Collections.emptyMap()));
@@ -194,14 +203,15 @@ public class PipelineExecutionServiceTests extends ESTestCase {
         @SuppressWarnings("unchecked")
         Consumer<Boolean> completionHandler = mock(Consumer.class);
         executionService.executeIndexRequest(indexRequest, failureHandler, completionHandler);
-        verify(failureHandler, never()).accept(any(RuntimeException.class));
+        verify(failureHandler, never()).accept(any(ElasticsearchException.class));
         verify(completionHandler, times(1)).accept(true);
     }
 
     public void testExecuteFailureWithOnFailure() throws Exception {
         Processor processor = mock(Processor.class);
         Processor onFailureProcessor = mock(Processor.class);
-        CompoundProcessor compoundProcessor = new CompoundProcessor(Collections.singletonList(processor), Collections.singletonList(new CompoundProcessor(onFailureProcessor)));
+        CompoundProcessor compoundProcessor = new CompoundProcessor(false, Collections.singletonList(processor),
+                Collections.singletonList(new CompoundProcessor(onFailureProcessor)));
         when(store.get("_id")).thenReturn(new Pipeline("_id", "_description", compoundProcessor));
         IndexRequest indexRequest = new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("_id");
         doThrow(new RuntimeException()).when(processor).execute(eqID("_index", "_type", "_id", Collections.emptyMap()));
@@ -220,8 +230,9 @@ public class PipelineExecutionServiceTests extends ESTestCase {
         Processor processor = mock(Processor.class);
         Processor onFailureProcessor = mock(Processor.class);
         Processor onFailureOnFailureProcessor = mock(Processor.class);
-        CompoundProcessor compoundProcessor = new CompoundProcessor(Collections.singletonList(processor),
-            Collections.singletonList(new CompoundProcessor(Collections.singletonList(onFailureProcessor), Collections.singletonList(onFailureOnFailureProcessor))));
+        CompoundProcessor compoundProcessor = new CompoundProcessor(false, Collections.singletonList(processor),
+            Collections.singletonList(new CompoundProcessor(false, Collections.singletonList(onFailureProcessor),
+                    Collections.singletonList(onFailureOnFailureProcessor))));
         when(store.get("_id")).thenReturn(new Pipeline("_id", "_description", compoundProcessor));
         IndexRequest indexRequest = new IndexRequest("_index", "_type", "_id").source(Collections.emptyMap()).setPipeline("_id");
         doThrow(new RuntimeException()).when(onFailureOnFailureProcessor).execute(eqID("_index", "_type", "_id", Collections.emptyMap()));
@@ -339,6 +350,59 @@ public class PipelineExecutionServiceTests extends ESTestCase {
 
         verify(requestItemErrorHandler, never()).accept(any(), any());
         verify(completionHandler, times(1)).accept(null);
+    }
+
+    public void testStats() throws Exception {
+        IngestStats ingestStats = executionService.stats();
+        assertThat(ingestStats.getStatsPerPipeline().size(), equalTo(0));
+        assertThat(ingestStats.getTotalStats().getIngestCount(), equalTo(0L));
+        assertThat(ingestStats.getTotalStats().getIngestCurrent(), equalTo(0L));
+        assertThat(ingestStats.getTotalStats().getIngestFailedCount(), equalTo(0L));
+        assertThat(ingestStats.getTotalStats().getIngestTimeInMillis(), equalTo(0L));
+
+        when(store.get("_id1")).thenReturn(new Pipeline("_id1", null, new CompoundProcessor()));
+        when(store.get("_id2")).thenReturn(new Pipeline("_id2", null, new CompoundProcessor()));
+
+        Map<String, PipelineConfiguration> configurationMap = new HashMap<>();
+        configurationMap.put("_id1", new PipelineConfiguration("_id1", new BytesArray("{}")));
+        configurationMap.put("_id2", new PipelineConfiguration("_id2", new BytesArray("{}")));
+        executionService.updatePipelineStats(new IngestMetadata(configurationMap));
+
+        Consumer<Throwable> failureHandler = mock(Consumer.class);
+        Consumer<Boolean> completionHandler = mock(Consumer.class);
+
+        IndexRequest indexRequest = new IndexRequest("_index");
+        indexRequest.setPipeline("_id1");
+        executionService.executeIndexRequest(indexRequest, failureHandler, completionHandler);
+        ingestStats = executionService.stats();
+        assertThat(ingestStats.getStatsPerPipeline().size(), equalTo(2));
+        assertThat(ingestStats.getStatsPerPipeline().get("_id1").getIngestCount(), equalTo(1L));
+        assertThat(ingestStats.getStatsPerPipeline().get("_id2").getIngestCount(), equalTo(0L));
+        assertThat(ingestStats.getTotalStats().getIngestCount(), equalTo(1L));
+
+        indexRequest.setPipeline("_id2");
+        executionService.executeIndexRequest(indexRequest, failureHandler, completionHandler);
+        ingestStats = executionService.stats();
+        assertThat(ingestStats.getStatsPerPipeline().size(), equalTo(2));
+        assertThat(ingestStats.getStatsPerPipeline().get("_id1").getIngestCount(), equalTo(1L));
+        assertThat(ingestStats.getStatsPerPipeline().get("_id2").getIngestCount(), equalTo(1L));
+        assertThat(ingestStats.getTotalStats().getIngestCount(), equalTo(2L));
+    }
+
+    // issue: https://github.com/elastic/elasticsearch/issues/18126
+    public void testUpdatingStatsWhenRemovingPipelineWorks() throws Exception {
+        Map<String, PipelineConfiguration> configurationMap = new HashMap<>();
+        configurationMap.put("_id1", new PipelineConfiguration("_id1", new BytesArray("{}")));
+        configurationMap.put("_id2", new PipelineConfiguration("_id2", new BytesArray("{}")));
+        executionService.updatePipelineStats(new IngestMetadata(configurationMap));
+        assertThat(executionService.stats().getStatsPerPipeline(), hasKey("_id1"));
+        assertThat(executionService.stats().getStatsPerPipeline(), hasKey("_id2"));
+
+        configurationMap = new HashMap<>();
+        configurationMap.put("_id3", new PipelineConfiguration("_id3", new BytesArray("{}")));
+        executionService.updatePipelineStats(new IngestMetadata(configurationMap));
+        assertThat(executionService.stats().getStatsPerPipeline(), not(hasKey("_id1")));
+        assertThat(executionService.stats().getStatsPerPipeline(), not(hasKey("_id2")));
     }
 
     private IngestDocument eqID(String index, String type, String id, Map<String, Object> source) {

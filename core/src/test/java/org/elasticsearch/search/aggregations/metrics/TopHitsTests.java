@@ -21,14 +21,15 @@ package org.elasticsearch.search.aggregations.metrics;
 
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.index.query.AbstractQueryTestCase;
+import org.elasticsearch.test.AbstractQueryTestCase;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.search.aggregations.AggregationInitializationException;
 import org.elasticsearch.search.aggregations.BaseAggregationTestCase;
-import org.elasticsearch.search.aggregations.metrics.tophits.TopHitsAggregatorBuilder;
+import org.elasticsearch.search.aggregations.metrics.tophits.TopHitsAggregationBuilder;
 import org.elasticsearch.search.fetch.source.FetchSourceContext;
 import org.elasticsearch.search.highlight.HighlightBuilderTests;
+import org.elasticsearch.search.sort.ScriptSortBuilder.ScriptSortType;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
 
@@ -37,11 +38,11 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
 
-public class TopHitsTests extends BaseAggregationTestCase<TopHitsAggregatorBuilder> {
+public class TopHitsTests extends BaseAggregationTestCase<TopHitsAggregationBuilder> {
 
     @Override
-    protected final TopHitsAggregatorBuilder createTestAggregatorBuilder() {
-        TopHitsAggregatorBuilder factory = new TopHitsAggregatorBuilder("foo");
+    protected final TopHitsAggregationBuilder createTestAggregatorBuilder() {
+        TopHitsAggregationBuilder factory = new TopHitsAggregationBuilder("foo");
         if (randomBoolean()) {
             factory.from(randomIntBetween(0, 10000));
         }
@@ -132,7 +133,7 @@ public class TopHitsTests extends BaseAggregationTestCase<TopHitsAggregatorBuild
                     factory.sort(SortBuilders.scoreSort().order(randomFrom(SortOrder.values())));
                     break;
                 case 3:
-                    factory.sort(SortBuilders.scriptSort(new Script("foo"), "number").order(randomFrom(SortOrder.values())));
+                    factory.sort(SortBuilders.scriptSort(new Script("foo"), ScriptSortType.NUMBER).order(randomFrom(SortOrder.values())));
                     break;
                 case 4:
                     factory.sort(randomAsciiOfLengthBetween(5, 20));
@@ -172,11 +173,9 @@ public class TopHitsTests extends BaseAggregationTestCase<TopHitsAggregatorBuild
             "}";
         try {
             XContentParser parser = XContentFactory.xContent(source).createParser(source);
-            QueryParseContext parseContext = new QueryParseContext(queriesRegistry);
-            parseContext.reset(parser);
-            parseContext.parseFieldMatcher(parseFieldMatcher);
+            QueryParseContext parseContext = new QueryParseContext(queriesRegistry, parser, parseFieldMatcher);
             assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-            aggParsers.parseAggregators(parser, parseContext);
+            aggParsers.parseAggregators(parseContext);
             fail();
         } catch (AggregationInitializationException e) {
             assertThat(e.toString(), containsString("Aggregator [top_tags_hits] of type [top_hits] cannot accept sub-aggregations"));

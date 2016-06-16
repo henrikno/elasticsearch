@@ -22,18 +22,26 @@ package org.elasticsearch.index.mapper.core;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TermRangeQuery;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.Booleans;
-import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.index.fielddata.IndexFieldData;
+import org.elasticsearch.index.fielddata.IndexNumericFieldData.NumericType;
+import org.elasticsearch.index.fielddata.plain.DocValuesIndexFieldData;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.ParseContext;
+import org.elasticsearch.index.mapper.TermBasedFieldType;
+import org.elasticsearch.search.DocValueFormat;
+import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -42,7 +50,6 @@ import java.util.Map;
 
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.lenientNodeBooleanValue;
 import static org.elasticsearch.index.mapper.core.TypeParsers.parseField;
-import static org.elasticsearch.index.mapper.core.TypeParsers.parseMultiField;
 
 /**
  * A field mapper for boolean fields.
@@ -99,7 +106,7 @@ public class BooleanFieldMapper extends FieldMapper {
             parseField(builder, name, node, parserContext);
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
-                String propName = Strings.toUnderscoreCase(entry.getKey());
+                String propName = entry.getKey();
                 Object propNode = entry.getValue();
                 if (propName.equals("null_value")) {
                     if (propNode == null) {
@@ -107,15 +114,13 @@ public class BooleanFieldMapper extends FieldMapper {
                     }
                     builder.nullValue(lenientNodeBooleanValue(propNode));
                     iterator.remove();
-                } else if (parseMultiField(builder, name, parserContext, propName, propNode)) {
-                    iterator.remove();
                 }
             }
             return builder;
         }
     }
 
-    public static final class BooleanFieldType extends MappedFieldType {
+    public static final class BooleanFieldType extends TermBasedFieldType {
 
         public BooleanFieldType() {}
 
@@ -165,31 +170,45 @@ public class BooleanFieldMapper extends FieldMapper {
         }
 
         @Override
-        public Boolean value(Object value) {
+        public Boolean valueForSearch(Object value) {
             if (value == null) {
-                return Boolean.FALSE;
+                return null;
             }
-            String sValue = value.toString();
-            if (sValue.length() == 0) {
-                return Boolean.FALSE;
+            switch(value.toString()) {
+            case "F":
+                return false;
+            case "T":
+                return true;
+            default:
+                throw new IllegalArgumentException("Expected [T] or [F] but got [" + value + "]");
             }
-            if (sValue.length() == 1 && sValue.charAt(0) == 'F') {
-                return Boolean.FALSE;
-            }
-            if (Booleans.parseBoolean(sValue, false)) {
-                return Boolean.TRUE;
-            }
-            return Boolean.FALSE;
         }
 
         @Override
-        public Object valueForSearch(Object value) {
-            return value(value);
+        public IndexFieldData.Builder fielddataBuilder() {
+            failIfNoDocValues();
+            return new DocValuesIndexFieldData.Builder().numericType(NumericType.BOOLEAN);
         }
-        
+
         @Override
-        public boolean useTermQueryWithQueryString() {
-            return true;
+        public DocValueFormat docValueFormat(@Nullable String format, DateTimeZone timeZone) {
+            if (format != null) {
+                throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] does not support custom formats");
+            }
+            if (timeZone != null) {
+                throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName()
+                    + "] does not support custom time zones");
+            }
+            return DocValueFormat.BOOLEAN;
+        }
+
+        @Override
+        public Query rangeQuery(Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper) {
+            failIfNotIndexed();
+            return new TermRangeQuery(name(),
+                lowerTerm == null ? null : indexedValueForSearch(lowerTerm),
+                upperTerm == null ? null : indexedValueForSearch(upperTerm),
+                includeLower, includeUpper);
         }
     }
 
