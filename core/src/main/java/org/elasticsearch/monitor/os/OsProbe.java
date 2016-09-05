@@ -134,6 +134,66 @@ public class OsProbe {
     }
 
     @SuppressForbidden(reason = "access /proc")
+    public long getCgroupCpuTime() {
+        try {
+            List<String> lines = Files.readAllLines(PathUtils.get("/sys/fs/cgroup/cpuacct/cpuacct.usage"));
+            return Long.parseLong(lines.get(0));
+        } catch (IOException e) {
+            // ignore
+        }
+        return -1;
+    }
+
+    @SuppressForbidden(reason = "access /proc")
+    public long getCgroupCfsPeriod() {
+        try {
+            List<String> lines = Files.readAllLines(PathUtils.get("/sys/fs/cgroup/cpuacct/cpu.cfs_period_us"));
+            return Long.parseLong(lines.get(0));
+        } catch (IOException e) {
+            // ignore
+        }
+        return -1;
+    }
+
+    @SuppressForbidden(reason = "access /proc")
+    public long getCgroupCfsQuota() {
+        try {
+            List<String> lines = Files.readAllLines(PathUtils.get("/sys/fs/cgroup/cpuacct/cpu.cfs_quota_us"));
+            return Long.parseLong(lines.get(0));
+        } catch (IOException e) {
+            // ignore
+        }
+        return -1;
+    }
+
+    @SuppressForbidden(reason = "access /proc")
+    public void getCgroupCpuStat(OsStats.Cgroup cgroup) {
+        if (Constants.LINUX) {
+            try {
+                List<String> lines = Files.readAllLines(PathUtils.get("/sys/fs/cgroup/cpuacct/cpu.stat"));
+                for (String line : lines) {
+                    String[] split = line.split("\\s+");
+                    switch (split[0]) {
+                        case "nr_periods":
+                            cgroup.nr_periods = Long.parseLong(split[1]);
+                            break;
+                        case "nr_throttled":
+                            cgroup.nr_throttled = Long.parseLong(split[1]);
+                            break;
+                        case "throttled_time":
+                            cgroup.throttled_time = Long.parseLong(split[1]);
+                            break;
+                    }
+                }
+
+
+            } catch (IOException e) {
+                // ignore
+            }
+        }
+    }
+
+    @SuppressForbidden(reason = "access /proc")
     private static double[] readProcLoadavg(String procLoadavg) {
         try {
             List<String> lines = Files.readAllLines(PathUtils.get(procLoadavg));
@@ -178,6 +238,12 @@ public class OsProbe {
         stats.cpu = new OsStats.Cpu();
         stats.cpu.percent = getSystemCpuPercent();
         stats.cpu.loadAverage = getSystemLoadAverage();
+
+        stats.cgroup = new OsStats.Cgroup();
+        stats.cgroup.cfsPeriod = getCgroupCfsPeriod();
+        stats.cgroup.cfsQuota = getCgroupCfsQuota();
+        stats.cgroup.cpuTime = getCgroupCpuTime();
+        getCgroupCpuStat(stats.cgroup);
 
         OsStats.Mem mem = new OsStats.Mem();
         mem.total = getTotalPhysicalMemorySize();

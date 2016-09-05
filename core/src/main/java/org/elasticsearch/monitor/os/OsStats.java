@@ -42,6 +42,8 @@ public class OsStats implements Streamable, ToXContent {
 
     Swap swap = null;
 
+    Cgroup cgroup = null;
+
     OsStats() {
     }
 
@@ -102,9 +104,7 @@ public class OsStats implements Streamable, ToXContent {
                 }
                 builder.endObject();
             }
-            builder.endObject();
         }
-
         if (mem != null) {
             builder.startObject(Fields.MEM);
             builder.byteSizeField(Fields.TOTAL_IN_BYTES, Fields.TOTAL, mem.getTotal());
@@ -122,6 +122,17 @@ public class OsStats implements Streamable, ToXContent {
             builder.byteSizeField(Fields.TOTAL_IN_BYTES, Fields.TOTAL, swap.getTotal());
             builder.byteSizeField(Fields.FREE_IN_BYTES, Fields.FREE, swap.getFree());
             builder.byteSizeField(Fields.USED_IN_BYTES, Fields.USED, swap.getUsed());
+            builder.endObject();
+        }
+
+        if (cgroup != null) {
+            builder.startObject("cgroup");
+            builder.field("cpu_time", cgroup.cpuTime);
+            builder.field("cfs_period", cgroup.cfsPeriod);
+            builder.field("cfs_quota", cgroup.cfsQuota);
+            builder.field("nr_periods", cgroup.nr_periods);
+            builder.field("nr_throttled", cgroup.nr_throttled);
+            builder.field("throttled_time", cgroup.throttled_time);
             builder.endObject();
         }
 
@@ -145,6 +156,7 @@ public class OsStats implements Streamable, ToXContent {
         if (in.readBoolean()) {
             swap = Swap.readSwap(in);
         }
+        cgroup = in.readOptionalStreamable(Cgroup::new);
     }
 
     @Override
@@ -163,6 +175,7 @@ public class OsStats implements Streamable, ToXContent {
             out.writeBoolean(true);
             swap.writeTo(out);
         }
+        out.writeOptionalStreamable(cgroup);
     }
 
     public static class Cpu implements Streamable {
@@ -206,6 +219,37 @@ public class OsStats implements Streamable, ToXContent {
         public double[] getLoadAverage() {
             return loadAverage;
         }
+    }
+
+
+    public static class Cgroup implements Streamable {
+        long cpuTime = -1;
+        long cfsPeriod = -1;
+        long cfsQuota = -1;
+        long nr_periods = -1;
+        long nr_throttled = -1;
+        long throttled_time = -1;
+
+        @Override
+        public void readFrom(StreamInput in) throws IOException {
+            cpuTime = in.readLong();
+            cfsPeriod = in.readLong();
+            cfsQuota = in.readLong();
+            nr_periods = in.readLong();
+            nr_throttled = in.readLong();
+            throttled_time = in.readLong();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeLong(cpuTime);
+            out.writeLong(cfsPeriod);
+            out.writeLong(cfsQuota);
+            out.writeLong(nr_periods);
+            out.writeLong(nr_throttled);
+            out.writeLong(throttled_time);
+        }
+
     }
 
     public static class Swap implements Streamable {
@@ -291,4 +335,5 @@ public class OsStats implements Streamable, ToXContent {
     private static short calculatePercentage(long used, long max) {
         return max <= 0 ? 0 : (short) (Math.round((100d * used) / max));
     }
+
 }

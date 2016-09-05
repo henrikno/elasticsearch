@@ -132,4 +132,11 @@ grant {
 
   // io stats on Linux
   permission java.io.FilePermission "/proc/diskstats", "read";
+
+  // cgroup stats on Linux
+  permission java.io.FilePermission "/sys/fs/cgroup/cpuacct/cpuacct.usage", "read";
+  permission java.io.FilePermission "/sys/fs/cgroup/cpuacct/cpu.cfs_period_us", "read";
+  permission java.io.FilePermission "/sys/fs/cgroup/cpuacct/cpu.cfs_quota_us", "read";
+  permission java.io.FilePermission "/sys/fs/cgroup/cpuacct/cpu.stat", "read";
+
 };
